@@ -45,6 +45,19 @@ class ParcelwiseTests(unittest.TestCase):
         other=self.data();other['destination']='Delhi';q=next(p for p in server.quotes(other)['partners'] if p['id']=='A')
         self.assertGreater(q['quality'],after['quality'])
         server.init(); saved=next(x for x in server.shipments() if x['id']==s['id']);self.assertEqual(saved['stage'],4);self.assertEqual(saved['feedback']['rating'],1)
+    def test_customer_tracking(self):
+        _, booked = self.post('shipments', self.data(partner='A'))
+        with urllib.request.urlopen(self.base + '/api/shipments/' + booked['id']) as response:
+            self.assertEqual(response.headers['Cache-Control'], 'no-store')
+            tracking = json.load(response)
+        self.assertEqual(tracking['id'], booked['id'])
+        self.assertEqual(tracking['status'], 'Booked')
+        self.assertNotIn('weight', tracking)
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(self.base + '/api/shipments/PW-MISSING')
+        self.assertEqual(caught.exception.code, 404)
+        caught.exception.close()
+
     def test_unknown_shipment(self): self.assertEqual(self.post('advance',{'id':'missing'})[0],404)
 
 if __name__=='__main__': unittest.main()

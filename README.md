@@ -16,12 +16,14 @@ Open http://localhost:8000. The server listens only on the local computer. Use a
 
 ## Try the complete flow
 
-1. Start with Mumbai → Bengaluru and a 2 kg parcel. Compare the three companies.
-2. Switch among Best match, Lowest price, Fastest, and Most reliable. Expand “Why this score?” to inspect normalized criteria and weights.
-3. Select a partner to create a shipment. Its quoted price and recommendation metrics are saved as a snapshot.
-4. In My shipments, advance tracking four times to Delivered.
-5. Add the customer's delivery care rating, on-time outcome, and successful-delivery outcome.
-6. Compare the same route again. Its new response count and updated performance appear immediately. Reloading or restarting preserves shipment and feedback records.
+1. Enter From, To, and Weight. Expand Parcel size to adjust the visible default measurements.
+2. Click Find delivery partners. Compare total price, arrival time, on-time delivery rate, and parcel care. One partner is recommended with a plain-language reason.
+3. Optionally use Sort by to prioritize price, speed, or reliability, then choose a partner.
+4. In My deliveries, expand Try demo tracking and move the parcel through the four stages to Delivered.
+5. Open customer view. This separate page shows only that parcel's journey, a refresh control, and a feedback button after delivery.
+6. Submit care, on-time, and successful-delivery feedback. Future comparisons incorporate the outcome, with historical smoothing.
+
+The interface follows [Accord](https://github.com/Preethesh16/accord)'s guided requirements → recommended option → outcome pattern. Seller navigation has just two choices. Ranking formulas are available behind a secondary explanation link.
 
 A fresh clone starts with an empty shipment history. All quotes and activity are simulated.
 
@@ -42,13 +44,13 @@ python3 -m unittest discover -v
 node --check static/app.js  # optional, requires Node
 ```
 
-Five automated tests cover priority rankings and deals, route/volumetric eligibility, invalid data, the booking-to-feedback lifecycle and persistence, feedback smoothing and route weighting, duplicate/early feedback rejection, and unknown shipments. Tests use a temporary isolated database and HTTP server.
+Six automated tests cover priority rankings and deals, route/volumetric eligibility, invalid data, the booking-to-feedback lifecycle and persistence, feedback smoothing and route weighting, duplicate/early feedback rejection, and unknown shipments, and the individual customer tracking response. Tests use a temporary isolated database and HTTP server.
 
 Browser verification covered booking, all tracking stages, saving feedback, seeing updated recommendations, and mobile viewport overflow at 390 px.
 
 ## Limitations
 
-This is a local single-workspace demo, not a production deployment. A/B/C are delivery companies, not individual couriers. Quotes, historical data, distances, and tracking are simulated. There are no real carrier bookings, payments, notifications, authentication, precise addresses, or postcode-level service checks. Customer feedback is entered through a seller-accessible demo form; production would need authenticated or signed recipient links, verified carrier outcomes, fraud controls, and real integrations. Calendar-day estimates are simplified and are not shipping promises.
+This is a local single-workspace demo, not a production deployment. A/B/C are delivery companies, not individual couriers. Quotes, historical data, distances, and tracking are simulated. There are no real carrier bookings, payments, notifications, authentication, precise addresses, or postcode-level service checks. The separate customer view is a demo presentation, not an authorization boundary. Its local URL only works on the machine running the server. Production would need authenticated sellers, signed recipient links, verified carrier outcomes, fraud controls, and real integrations. Calendar-day estimates are simplified and are not shipping promises.
 
 ## Files
 

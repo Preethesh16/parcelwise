@@ -75,11 +75,19 @@ def shipments():
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self,*args,**kwargs): super().__init__(*args,directory=str(ROOT/'static'),**kwargs)
+    def end_headers(self):
+        self.send_header('Cache-Control','no-store')
+        super().end_headers()
     def respond(self,data,status=200):
         body=json.dumps(data).encode(); self.send_response(status); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
     def do_GET(self):
         if self.path=='/api/meta': return self.respond(dict(cities=list(CITIES),stages=STAGES))
         if self.path=='/api/shipments': return self.respond(shipments())
+        if self.path.startswith('/api/shipments/'):
+            sid=self.path.removeprefix('/api/shipments/')
+            shipment=next((s for s in shipments() if s['id']==sid),None)
+            if shipment is None: return self.respond(dict(error='Shipment not found.'),404)
+            return self.respond({k:shipment[k] for k in ['id','origin','destination','partner','stage','status','feedback']})
         return super().do_GET()
     def do_POST(self):
         try:
