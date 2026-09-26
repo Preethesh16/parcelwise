@@ -35,3 +35,9 @@
   .product-art { height:230px; }
   .product-art svg { height:205px; }
 }
+
+/* Use the available storefront width with a balanced, consistent outer gutter. */
+:root { --store-gutter:clamp(20px,5vw,80px); }
+header { padding-inline:var(--store-gutter); }
+main { max-width:none; width:100%; padding-inline:var(--store-gutter); }
+footer { max-width:none; margin-inline:var(--store-gutter); }
