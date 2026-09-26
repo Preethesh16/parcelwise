@@ -328,7 +328,7 @@ footer { max-width:none; margin-inline:clamp(24px,4vw,68px); }
 .journey-page .chat-waiting { height:240px; }
 .journey-page #delivery-map { height:clamp(320px,52vh,540px); }
 .map-handoff { display:flex; align-items:center; justify-content:center; gap:10px; padding:16px; margin:20px 0 0; border:1px solid #dce8cd; border-radius:9px; background:#f0f6e8; color:#6b8650; font-size:12px; }
-#broadcast-scene,#negotiation-scene,#contract-scene,#map-panel { scroll-margin-top:24px; }
+#broadcast-scene,#negotiation-scene,#winner-scene,#contract-scene,#map-panel { scroll-margin-top:24px; }
 @media(max-width:740px) {
  .journey-page main { padding-top:18px; }
  .journey-page .live-main>.panel { padding:22px 18px; }

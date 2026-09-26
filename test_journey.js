@@ -33,3 +33,16 @@ assert.equal(context.rendered,1,'a stale handoff must not run after navigation')
 vm.runInContext("location.hash='#order=PW-TEST';lastOrder.stage=4;scheduleMapDemo(lastOrder);",context);
 assert.equal(timers.size,0,'reported delivery must not restart');
 console.log('Automatic map handoff: scheduling, cancellation, pause and navigation checks passed.');
+
+const focus = source.slice(source.indexOf('function journeyFocus('), source.indexOf('function renderJourney('));
+vm.runInContext(focus,context);
+const order={status:'bidding'};
+assert.equal(context.journeyFocus(order,false),'bidding');
+order.status='deal_finalized';order.winner={name:'Partner B'};
+assert.equal(context.journeyFocus(order,false),'winner','selected partner must appear before contract');
+order.contract={state:'created'};
+assert.equal(context.journeyFocus(order,false),'contract');
+order.contract.state='funded';
+assert.equal(context.journeyFocus(order,false),'contract','funding animation finishes before map');
+assert.equal(context.journeyFocus(order,true),'map');
+console.log('Journey focus: negotiation → selected partner → contract → map passed.');

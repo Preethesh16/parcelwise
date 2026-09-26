@@ -250,7 +250,7 @@ class Workflow:
                 else:
                     self.transfer(db,oid,'fund','company','escrow',amount);o['contract']['state']='funded';o['status']='booked';self.create_shipment(db,o)
                     event('Company wallet',f"Transferred ₹{amount/100:.2f} into simulated escrow. Ready for pickup; payout waits for customer confirmation.",'funded')
-            o['phase']=phase+1;o['nextAt']=(datetime.now(timezone.utc)+timedelta(seconds=2.4 if o['status']=='bidding' else 4)).isoformat()
+            o['phase']=phase+1;o['nextAt']=(datetime.now(timezone.utc)+timedelta(seconds=2.4 if o['status']=='bidding' else 7 if o['status']=='deal_finalized' else 4)).isoformat()
             db.execute('UPDATE orders SET data=? WHERE id=?',(canonical(o),oid))
     @staticmethod
     def score(price,p,priority):
