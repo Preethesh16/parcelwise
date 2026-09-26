@@ -1,4 +1,4 @@
-"""Independent Everyday storefront; confirmed orders leave through HTTP only."""
+"""Parcelwise landing server; legacy storefront APIs remain available internally."""
 import argparse, json, os, sqlite3, urllib.request, urllib.error
 from pathlib import Path
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -44,6 +44,9 @@ class Handler(SimpleHTTPRequestHandler):
     def respond(self,data,status=200):
         body=json.dumps(data).encode();self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Cache-Control','no-store');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
     def do_GET(self):
+        if self.path in ('/','/index.html'):
+            self.path='/landing.html'
+            return super().do_GET()
         if self.path=='/api/catalog':return self.respond(dict(products=PRODUCTS,cities=CITIES))
         if self.path=='/api/config':return self.respond(dict(parcelwiseUrl=PUBLIC))
         return super().do_GET()
@@ -59,5 +62,5 @@ class Handler(SimpleHTTPRequestHandler):
         except ConnectionError as error:self.respond(dict(error=str(error),confirmed=True),503)
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--port',type=int,default=8000);args=parser.parse_args();init()
-    print(f'Everyday running at http://localhost:{args.port}',flush=True)
+    print(f'Parcelwise landing running at http://localhost:{args.port}',flush=True)
     ThreadingHTTPServer(('127.0.0.1',args.port),Handler).serve_forever()
