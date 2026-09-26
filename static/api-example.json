@@ -1,0 +1,7 @@
+{
+  "orderId": "DEMO-ORDER-1001",
+  "status": "confirmed",
+  "seller": {"name": "Everyday Store", "address": {"line1": "18 Market Road, Andheri", "city": "Mumbai", "postalCode": "400058"}},
+  "customer": {"name": "Demo Customer", "address": {"line1": "24 Lake Road", "city": "Bengaluru", "postalCode": "560001"}},
+  "items": [{"sku": "bag", "name": "The Weekender", "quantity": 1, "unitPrice": 249900, "weightKg": 1.2, "dimensionsCm": {"length": 35, "width": 25, "height": 12}}]
+}

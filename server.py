@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from contextlib import contextmanager
+from workflow import Workflow
 
 ROOT = Path(__file__).parent
 DB = Path(os.environ.get('PARCELWISE_DB', ROOT / 'data.sqlite3'))
@@ -20,6 +21,8 @@ def connect():
 def init():
     with connect() as db:
         db.execute('CREATE TABLE IF NOT EXISTS shipments (id TEXT PRIMARY KEY, data TEXT NOT NULL, stage INTEGER NOT NULL DEFAULT 0, created TEXT NOT NULL, feedback TEXT)')
+
+flow = Workflow(connect, lambda data: quotes(data), CITIES)
 
 def validate(data):
     if data.get('origin') not in CITIES or data.get('destination') not in CITIES: raise ValueError('Choose a supported origin and destination.')
@@ -81,6 +84,11 @@ class Handler(SimpleHTTPRequestHandler):
     def respond(self,data,status=200):
         body=json.dumps(data).encode(); self.send_response(status); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
     def do_GET(self):
+        if self.path=='/api/catalog': return self.respond(flow.catalog())
+        if self.path=='/api/platform': return self.respond(flow.dashboard())
+        if self.path.startswith('/api/tracking/'):
+            try: return self.respond(flow.tracking(self.path.removeprefix('/api/tracking/')))
+            except ValueError as error: return self.respond(dict(error=str(error)),404)
         if self.path=='/api/meta': return self.respond(dict(cities=list(CITIES),stages=STAGES))
         if self.path=='/api/shipments': return self.respond(shipments())
         if self.path.startswith('/api/shipments/'):
@@ -92,9 +100,25 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         try:
             size=int(self.headers.get('Content-Length','0'))
-            if size>10000: raise ValueError('Request too large.')
+            if not 0<size<=30000: raise ValueError('Request too large.')
             d=json.loads(self.rfile.read(size))
             if not isinstance(d,dict): raise ValueError('Expected a JSON object.')
+            if self.path=='/api/demo/checkout': return self.respond(flow.checkout(d),201)
+            if self.path=='/api/connections': return self.respond(flow.save_config(d))
+            if self.path=='/api/integrations/orders':
+                if not flow.authorized('company',self.headers.get('X-API-Key')): raise PermissionError('Invalid company API key.')
+                return self.respond(flow.ingest(d),201)
+            if self.path=='/api/integrations/delivery':
+                partner=d.get('partnerId')
+                if partner not in ['A','B','C'] or not flow.authorized('partner:'+partner,self.headers.get('X-API-Key')): raise PermissionError('Invalid partner API key.')
+                if 'stage' not in d: raise ValueError('An explicit stage is required for retry-safe tracking updates.')
+                return self.respond(flow.action(d.get('orderId'),'advance',d,partner=partner))
+            if self.path=='/api/demo/order-action':
+                if d.get('action') not in ['advance','refund','fund']: raise ValueError('Unsupported demo action.')
+                return self.respond(flow.action(d.get('id'),d['action'],d))
+            if self.path=='/api/tracking-action':
+                if d.get('action') not in ['confirm','dispute','feedback']: raise ValueError('Unsupported customer action.')
+                return self.respond(flow.action(d.get('id'),d['action'],d,token=d.get('token')))
             if self.path=='/api/quotes': return self.respond(quotes(d))
             if self.path=='/api/shipments':
                 result=quotes(d); partner=next((p for p in result['partners'] if p['id']==d.get('partner')),None)
@@ -105,6 +129,8 @@ class Handler(SimpleHTTPRequestHandler):
             if self.path in ['/api/advance','/api/feedback']:
                 with connect() as db:
                     db.execute('BEGIN IMMEDIATE')
+                    if db.execute("SELECT 1 FROM sqlite_master WHERE name='orders'").fetchone() and db.execute('SELECT 1 FROM orders WHERE id=?',(d.get('id'),)).fetchone():
+                        raise ValueError('Use the order delivery endpoint for platform orders.')
                     row=db.execute('SELECT * FROM shipments WHERE id=?',(d.get('id'),)).fetchone()
                     if row is None: return self.respond(dict(error='Shipment not found.'),404)
                     if self.path=='/api/advance': db.execute('UPDATE shipments SET stage=MIN(stage+1,4) WHERE id=?',(d['id'],))
@@ -116,9 +142,10 @@ class Handler(SimpleHTTPRequestHandler):
                         db.execute('UPDATE shipments SET feedback=? WHERE id=?',(json.dumps(f),d['id']))
                 return self.respond(dict(ok=True))
             self.respond(dict(error='Unknown endpoint.'),404)
+        except PermissionError as e: self.respond(dict(error=str(e)),401)
         except (ValueError,TypeError,KeyError) as e: self.respond(dict(error=str(e)),400)
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser(); parser.add_argument('--port',type=int,default=8000); args=parser.parse_args(); init()
+    parser=argparse.ArgumentParser(); parser.add_argument('--port',type=int,default=8000); args=parser.parse_args(); init(); flow.init()
     print(f'Parcelwise running at http://localhost:{args.port}',flush=True)
     ThreadingHTTPServer(('127.0.0.1',args.port),Handler).serve_forever()
