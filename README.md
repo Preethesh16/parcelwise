@@ -11,20 +11,33 @@ Python 3.10+; no pip or npm dependencies required.
 ```sh
 git clone https://github.com/Preethesh16/parcelwise.git
 cd parcelwise
-python3 server.py --port 8000
+python3 run_demo.py
 ```
 
-Open [the storefront](http://localhost:8000/#shop), [delivery platform](http://localhost:8000/#platform), or [connections](http://localhost:8000/#connections). The server binds to `127.0.0.1`. Optional Google Fonts have local fallbacks.
+Open [the storefront](http://localhost:8000/#shop), [delivery platform](http://localhost:8001/#platform), or [connections](http://localhost:8001/#connections). Both servers bind to `127.0.0.1`. Optional Google Fonts have local fallbacks.
+
+Run independently when preferred:
+
+```sh
+python3 server.py --port 8001      # Parcelwise API + delivery UI
+python3 storefront.py --port 8000  # Everyday ecommerce demo (another terminal)
+```
+
+Everyday environment: `PARCELWISE_API_URL` (default `http://127.0.0.1:8001`), `PARCELWISE_PUBLIC_URL` (default `http://localhost:8001`), `PARCELWISE_COMPANY_KEY` (default sandbox key), `EVERYDAY_DB` (default `store.sqlite3`). A failed handoff leaves the confirmed order saved; retrying the same checkout resends its original event safely. Editing the checkout creates a new request.
+
+`POST /api/v1/orders` accepts the confirmed-order payload and returns HTTP 202 with `{id, customerToken, status, duplicate}`. `GET /api/v1/orders/{id}` returns saved steps, bids, contract, transactions and city map coordinates. The local UI polls once per second. The legacy `/api/integrations/orders` endpoint remains synchronous for compatibility; new integrations should use v1.
+
+Map implementation follows [Leaflet 1.9.4](https://leafletjs.com/examples/quick-start/) and [OpenStreetMap tile usage requirements](https://operations.osmfoundation.org/policies/tiles/), including visible attribution. No private street addresses are sent to the map service. Leaflet's license is included in `static/vendor/LEAFLET-LICENSE`.
 
 ## Walk through the demo
 
 1. **Shop:** choose The Weekender, Daybreak Bottle, or Evening Light. Enter a sample recipient and supported address. Confirm the demo order; no card is needed.
-2. **Order confirmed:** the storefront constructs a confirmed order event using authoritative product measurements and the configured company warehouse. It invokes the same ingestion service as the integration endpoint.
+2. **Order confirmed:** the storefront constructs a confirmed order event using authoritative product measurements and the Everyday warehouse. The store saves its confirmed order in its own database, sends an authenticated HTTP request to Parcelwise, then redirects to `http://localhost:8001/#order=PW-…`. There is no shared database or in-process ingestion call between the apps. The demo store owns its warehouse address in `storefront.py`.
 3. **Automatic dispatch:** the parser extracts seller/customer addresses and item quantities, weights, and dimensions. It assumes one parcel, with items stacked vertically: max length/width, summed height, summed weight. Volumetric weight is volume / 5,000.
 4. **Negotiation:** three local carrier agents receive route and parcel details. Eligible agents offer an opening price, a midpoint concession, and their final allowed price. The company agent requests improvements between rounds. No carrier goes below its floor or beyond its maximum discount. Each maintains its configured transit promise.
-5. **Selection and escrow:** only offers meeting the company's shipping budget and deadline qualify. Normalized price, speed, reliability, and quality select the winner. A simulated contract stores immutable terms and a SHA-256 terms hash. Company → escrow movement and order creation are one SQLite transaction.
-6. **Follow delivery:** open the order in Delivery platform. Expand **Try the delivery demo** to simulate pickup, transit, out-for-delivery, and reported delivery. Expand negotiation or activity to inspect what happened.
-7. **Customer proof:** open **customer tracking**. The customer confirms receipt to release escrow, or reports an issue to hold payout. A partner report alone cannot release payment.
+5. **Selection and escrow:** only offers meeting the company's shipping budget and deadline qualify. Normalized price, speed, reliability, and quality select the winner. A simulated contract stores immutable terms and a SHA-256 terms hash. The API first returns HTTP 202. A durable worker advances one stage every 2.5 seconds, with each state saved separately. Escrow funding happens only after contract creation, in an atomic ledger transaction. Refreshing or restarting resumes the saved workflow.
+6. **Follow delivery:** the redirect opens a live seven-step timeline with three rounds of partner bids. Once funded, **Run delivery demo** advances pickup, transit, out-for-delivery and reported delivery on an interactive Leaflet/OpenStreetMap map. Pause or resume at any stage. The route uses city-level demo points; it is not live GPS or road routing. Map tiles need internet; the local route overlay and status remain usable if tiles fail.
+7. **Customer proof:** confirm receipt directly below the map, or open **customer tracking**. The customer confirms receipt to release escrow, or reports an issue to hold payout. A partner report alone cannot release payment.
 8. **Settlement:** company, escrow, and partner balances update together with an append-only application transaction history. Refresh or restart to verify persistence.
 9. **Feedback:** the customer records care, timeliness, and successful receipt. Future quotes use this feedback, with route weighting and historical smoothing.
 
@@ -45,7 +58,7 @@ Sandbox keys authenticate **incoming** order or delivery-event requests. They ar
 Amounts in API payloads and the ledger are integer **paise**. UI displays INR-formatted demo credits. `unitPrice` is the merchandise unit price, separate from shipping.
 
 ```sh
-curl http://localhost:8000/api/integrations/orders \
+curl http://localhost:8001/api/v1/orders \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: demo-company-key' \
   --data-binary @static/api-example.json
@@ -56,7 +69,7 @@ See [the example payload](static/api-example.json). `orderId` is the idempotency
 For the selected carrier, send each tracking stage explicitly:
 
 ```sh
-curl http://localhost:8000/api/integrations/delivery \
+curl http://localhost:8001/api/integrations/delivery \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: demo-partner-B-key' \
   -d '{"orderId":"REPLACE_WITH_ORDER_ID","partnerId":"B","stage":1}'
@@ -64,7 +77,7 @@ curl http://localhost:8000/api/integrations/delivery \
 
 Stages: 1 pickup, 2 transit, 3 out for delivery, 4 reported delivered. Use the actual winning partner and its corresponding key. Stage replays are no-ops; skipping a stage is rejected. Wrong partner credentials or a non-winning partner cannot update the delivery.
 
-Initial demo keys: `demo-company-key`, `demo-partner-A-key`, `demo-partner-B-key`, `demo-partner-C-key`. After rotation, old keys stop working. The built-in store uses the internal ingestion service rather than a loopback HTTP request, so its checkout doesn't depend on the sandbox webhook key.
+Initial demo keys: `demo-company-key`, `demo-partner-A-key`, `demo-partner-B-key`, `demo-partner-C-key`. After rotation, old keys stop working. The store sends the company key server-to-server. After key rotation, restart Everyday with `PARCELWISE_COMPANY_KEY` set to the matching key. The key is never sent to the store browser.
 
 ## Escrow rules and failure states
 
@@ -98,10 +111,11 @@ A baseline equivalent to 40 historical simulated deliveries prevents one review 
 
 ```sh
 python3 -m unittest discover -v
+node --check storefront/app.js
 node --check static/app.js  # optional syntax check; requires Node
 ```
 
-21 tests cover the quote engine, parsing, checkout-to-payout, money conservation, concurrent duplicate orders, no-deal and insufficient-funds paths, API authentication and key rotation, non-winning partners, stage replay, persistence, disputed/expired refunds, immutable accepted terms, early/duplicate feedback rejection, and route-aware feedback.
+25 tests cover the quote engine, parsing, checkout-to-payout, money conservation, concurrent duplicate orders, no-deal and insufficient-funds paths, API authentication and key rotation, non-winning partners, stage replay, persistence, disputed/expired refunds, immutable accepted terms, early/duplicate feedback rejection, and route-aware feedback.
 
 Browser verification covers store checkout, automatic selection/escrow, all delivery stages, customer receipt and payout, feedback, and saving company/partner policy. Store and platform layouts are checked at mobile and desktop widths.
 
@@ -109,7 +123,10 @@ Browser verification covers store checkout, automatic selection/escrow, all deli
 
 - `server.py`: standard-library HTTP API and original quote/feedback engine.
 - `workflow.py`: order parser, company/partner policies, negotiation, contracts, wallets, and ledger.
-- `static/`: storefront, platform, connections, customer tracking, and example webhook payload.
+- `storefront.py`, `storefront/`: independent Everyday HTTP app and storefront. `store.sqlite3` persists confirmed checkouts and retry results.
+- `run_demo.py`: starts both loopback HTTP services.
+- `static/`: Parcelwise live journey, platform, connections, tracking, vendored Leaflet and example webhook payload.
+- `test_split_flow.py`: stage persistence, worker recovery, concurrent funding and independent HTTP checkout/outage/retry tests.
 - `test_server.py`, `test_workflow.py`: isolated tests using temporary databases.
 - `data.sqlite3`: generated local state, excluded from Git. `PARCELWISE_DB` selects another database path. Use a new path to start a separate clean demo without deleting existing data.
 

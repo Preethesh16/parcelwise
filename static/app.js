@@ -2,12 +2,7 @@ const $ = selector => document.querySelector(selector);
 const money = paise => '₹' + (Number(paise) / 100).toLocaleString('en-IN', {maximumFractionDigits: 2});
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const title = value => ({needs_attention:'Needs attention',needs_funding:'Awaiting funds',booked:'Booked',picked_up:'Picked up',in_transit:'In transit',out_for_delivery:'Out for delivery',awaiting_confirmation:'Awaiting customer',completed:'Completed',disputed:'Payout held',refunded:'Refunded'}[value] || value);
-let catalog, dashboard, selectedOrder = null, productId, checkoutRequest, editingPartner, customerToken, customerOrder, routeVersion = 0;
-const drawings = {
-  bag: `<svg viewBox="0 0 240 250" role="img" aria-label="Olive canvas weekender bag"><defs><linearGradient id="bagshade" x2="1" y2="1"><stop stop-color="#98a17d"/><stop offset="1" stop-color="#68775a"/></linearGradient></defs><ellipse cx="120" cy="224" rx="79" ry="9" fill="#405036" opacity=".08"/><path d="M74 92V65Q74 27 98 28Q122 27 122 66V85M118 85V66Q118 28 143 29Q167 28 167 66V92" fill="none" stroke="#5c674d" stroke-width="9"/><path d="M40 85Q119 70 200 85L210 208Q120 234 29 209Z" fill="url(#bagshade)"/><path d="M40 85L50 201Q122 222 199 202L200 85" fill="none" stroke="#aeb699" stroke-width="2"/><path d="M75 85L77 190M166 85L165 190" stroke="#526148" stroke-width="12"/><path d="M68 149Q120 141 173 149L173 199Q121 216 68 198Z" fill="#7d8c6a" stroke="#627451"/><path d="M68 150Q120 142 173 150" stroke="#b0b998" stroke-width="2"/><rect x="103" y="162" width="35" height="22" rx="2" fill="#dbcfaf"/><text x="120" y="176" text-anchor="middle" font-size="6" fill="#65634c" font-family="sans-serif">everyday.</text></svg>`,
-  bottle: `<svg viewBox="0 0 240 250" role="img" aria-label="Terracotta reusable water bottle"><defs><linearGradient id="bottleshade" x2="1"><stop stop-color="#ac7055"/><stop offset=".45" stop-color="#ca9273"/><stop offset="1" stop-color="#a4674f"/></linearGradient></defs><ellipse cx="121" cy="232" rx="43" ry="7" fill="#784930" opacity=".1"/><rect x="95" y="22" width="52" height="28" rx="8" fill="#5b5548"/><path d="M102 21V16Q120 2 138 16V22" fill="none" stroke="#5b5548" stroke-width="5"/><path d="M94 45H147L159 73V213Q159 231 141 231H100Q83 230 83 213V74Z" fill="url(#bottleshade)"/><path d="M95 58L92 77V210" fill="none" stroke="#dba68b" stroke-width="3" opacity=".55"/><text x="121" y="139" text-anchor="middle" transform="rotate(-90 121 139)" font-size="12" fill="#efe1cc" font-family="sans-serif" letter-spacing="1">everyday.</text><path d="M94 49H146" stroke="#8f5e49" stroke-width="3"/></svg>`,
-  lamp: `<svg viewBox="0 0 240 250" role="img" aria-label="Cream dome table lamp"><defs><linearGradient id="lampshade" x2="1" y2=".5"><stop stop-color="#e5dac6"/><stop offset=".45" stop-color="#f8eedb"/><stop offset="1" stop-color="#c9bda7"/></linearGradient></defs><ellipse cx="119" cy="232" rx="65" ry="8" fill="#68635a" opacity=".1"/><path d="M172 223Q218 219 224 238" fill="none" stroke="#8f8b7e" stroke-width="3"/><path d="M108 116H133V210H108Z" fill="#c3b49d"/><ellipse cx="120" cy="217" rx="59" ry="13" fill="#c5b7a0"/><ellipse cx="120" cy="214" rx="58" ry="12" fill="url(#lampshade)"/><path d="M35 126Q43 30 120 29Q196 29 206 126Z" fill="url(#lampshade)"/><ellipse cx="120" cy="125" rx="85" ry="10" fill="#c9b89c"/><ellipse cx="120" cy="126" rx="71" ry="6" fill="#f4deb2"/><path d="M56 96Q70 50 106 43" stroke="#fff8e9" opacity=".4" stroke-width="3" fill="none"/></svg>`
-};
+let catalog, dashboard, selectedOrder = null, editingPartner, customerToken, customerOrder, routeVersion = 0;
 async function api(path, data) {
   const response = await fetch('/api/' + path, {cache:'no-store', ...(data ? {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)} : {})});
   const body = await response.json();
@@ -16,18 +11,6 @@ async function api(path, data) {
 }
 function toast(message) {$('#toast').textContent=message;$('#toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('#toast').hidden=true,5000);}
 function closeDialogs() {document.querySelectorAll('dialog[open]').forEach(d=>d.close());}
-function renderProducts() {
-  $('#products').innerHTML=catalog.products.map((p,i)=>`<article class="product"><div class="product-art ${esc(p.color)}"><span class="tag">${['A carry-everywhere classic','Your daily companion','A softer kind of evening'][i]}</span>${drawings[p.id]}</div><div class="product-info"><span class="eyebrow">${esc(p.category)}</span><div class="product-name"><h3>${esc(p.name)}</h3><strong>${money(p.price)}</strong></div><p>${esc(p.description)}</p><button data-buy="${p.id}">Make it yours <span>↗</span></button></div></article>`).join('');
-  $('#checkout-city').innerHTML=catalog.cities.map(city=>`<option>${esc(city)}</option>`).join('');
-  $('#checkout-city').value='Bengaluru';
-  $('#excluded-cities').innerHTML=catalog.cities.map(city=>`<option>${esc(city)}</option>`).join('');
-}
-function openCheckout(id) {
-  const p=catalog.products.find(p=>p.id===id);productId=id;checkoutRequest=crypto.randomUUID();
-  $('#checkout-form').reset();$('#checkout-city').value='Bengaluru';$('#checkout-error').textContent='';
-  $('#checkout-product').innerHTML=`<div class="checkout-item"><div><b>${esc(p.name)}</b><small>${money(p.price)} each · Delivery arranged by the store</small></div><label>Qty<select name="quantity" id="quantity">${[1,2,3,4,5].map(n=>`<option>${n}</option>`).join('')}</select></label></div>`;
-  $('#checkout-total').textContent=money(p.price);$('#checkout').showModal();
-}
 async function loadDashboard() {dashboard=await api('platform');if(!selectedOrder || !dashboard.orders.some(o=>o.id===selectedOrder))selectedOrder=dashboard.orders[0]?.id;}
 function renderPlatform() {
   const w=dashboard.wallets;
@@ -35,14 +18,14 @@ function renderPlatform() {
   $('#order-count').textContent=dashboard.orders.length;
   $('#order-list').innerHTML=dashboard.orders.map(o=>`<button class="order-tab ${selectedOrder===o.id?'active':''}" data-order="${o.id}"><b>${o.id}</b><small>${esc(o.origin)} → ${esc(o.destination)}<br>${title(o.status)}</small></button>`).join('') || '<p class="history-note">Confirmed store orders appear here automatically.</p>';
   const o=dashboard.orders.find(o=>o.id===selectedOrder);
-  if(!o){$('#order-detail').innerHTML='<div class="panel empty"><div class="orbit">✳</div><span class="eyebrow">READY WHEN YOU ARE</span><h2>Start with a real demo order.</h2><p>Buy an item in the store to watch your delivery agents<br>negotiate, choose a partner and secure payment.</p><a href="#shop" class="primary button-link">Go to the store →</a></div>';return;}
+  if(!o){$('#order-detail').innerHTML='<div class="panel empty"><div class="orbit">✳</div><span class="eyebrow">READY WHEN YOU ARE</span><h2>Start with a real demo order.</h2><p>Buy an item in the store to watch your delivery agents<br>negotiate, choose a partner and secure payment.</p><a href="http://localhost:8000/" class="primary button-link">Go to the store →</a></div>';return;}
   const c=o.contract, winner=o.winner, locked=c&&['funded','disputed'].includes(c.state), paid=c?.state==='released';
   const progress=[true,!!winner,!!c&&c.state!=='created',paid];
   const stageNames=['Booked','Picked up','In transit','Out for delivery','Delivery reported'];
   $('#order-detail').innerHTML=`<article class="panel"><div class="detail-top"><div><span class="eyebrow">${o.id}</span><h2>${esc(o.origin)} → ${esc(o.destination)}</h2><p>${o.items.map(i=>`${i.quantity} × ${esc(i.name)}`).join(', ')} · ${o.weight} kg</p></div><span class="badge ${['disputed','needs_attention','needs_funding'].includes(o.status)?'alert':''}">${title(o.status)}</span></div>
-  <div class="journey">${['Order received','Partner selected','Payment secured','Delivered & paid'].map((s,i)=>`<div class="${progress[i]?'done':''}">${progress[i]?'●':'○'} ${s}</div>`).join('')}</div>
-  ${winner?`<div class="winner"><div><span class="eyebrow">YOUR AGENTS FOUND A DEAL</span><h3>${esc(winner.name)}</h3><p>Within your budget and deadline.<br>${(winner.ontime*100).toFixed(1)}% on time · ${(1+winner.quality*4).toFixed(1)}/5 parcel care</p></div><div class="winner-price"><strong>${money(winner.pricePaise)}</strong><small>${winner.days} days · shipping only</small><small>${money(winner.openingPrice-winner.pricePaise)} negotiated saving</small></div></div>`:'<div class="notice error-panel"><b>No deal meets your rules.</b><br>No payment was taken. Review the company budget, deadline and connected partners before placing a new order.</div>'}
-  <details><summary>See partner offers & negotiation</summary><p class="history-note">Policy agents made three rounds of offers. These are local simulations, not live carrier quotes or LLM conversations.</p><div class="offers">${o.offers.map(p=>`<div class="offer ${p.id===winner?.id?'chosen':''}"><b>${esc(p.name)} ${p.id===winner?.id?'✓':''}</b><strong>${money(p.pricePaise)}</strong><del>${money(p.openingPrice)}</del><small>${p.days} days · ${(p.reliability*100).toFixed(1)}% reliability<br>${p.score}/100 match · ${p.routeReviews} route reviews</small></div>`).join('')}</div>${o.excluded.map(p=>`<p class="status-note">${esc(p.name)}: ${esc(p.reason)}</p>`).join('')}<div class="events">${o.events.filter(e=>['offer','counter','declined','selected'].includes(e.kind)).map(eventHTML).join('')}</div><p class="history-note">Score balances normalized cost, speed, reliability and parcel care using the company priority. Reliability = 60% on-time + 40% successful deliveries. Historical evidence equivalent to 40 deliveries smooths feedback; matching-route feedback has full weight, other routes 20%.</p></details>
+  <a class="primary button-link" href="#order=${o.id}">Follow the live journey & map →</a><div class="journey">${['Order received','Partner selected','Payment secured','Delivered & paid'].map((s,i)=>`<div class="${progress[i]?'done':''}">${progress[i]?'●':'○'} ${s}</div>`).join('')}</div>
+  ${winner?`<div class="winner"><div><span class="eyebrow">YOUR AGENTS FOUND A DEAL</span><h3>${esc(winner.name)}</h3><p>Within your budget and deadline.<br>${(winner.ontime*100).toFixed(1)}% on time · ${(1+winner.quality*4).toFixed(1)}/5 parcel care</p></div><div class="winner-price"><strong>${money(winner.pricePaise)}</strong><small>${winner.days} days · shipping only</small><small>${money(winner.openingPrice-winner.pricePaise)} negotiated saving</small></div></div>`:`<div class="notice error-panel"><b>${o.status==='needs_attention'?'No deal meets your rules.':'Agents are arranging your delivery.'}</b><br>${o.status==='needs_attention'?'No payment was taken. Review the company budget, deadline and connected partners before placing a new order.':'Open the live journey to watch bids, contract creation and escrow funding.'}</div>`}
+  <details><summary>See partner offers & negotiation</summary><p class="history-note">Policy agents made three rounds of offers. These are local simulations, not live carrier quotes or LLM conversations.</p><div class="offers">${(o.offers||[]).map(p=>`<div class="offer ${p.id===winner?.id?'chosen':''}"><b>${esc(p.name)} ${p.id===winner?.id?'✓':''}</b><strong>${money(p.pricePaise)}</strong><del>${money(p.openingPrice)}</del><small>${p.days} days · ${(p.reliability*100).toFixed(1)}% reliability<br>${p.score}/100 match · ${p.routeReviews} route reviews</small></div>`).join('')}</div>${o.excluded.map(p=>`<p class="status-note">${esc(p.name)}: ${esc(p.reason)}</p>`).join('')}<div class="events">${o.events.filter(e=>['offer','counter','declined','selected'].includes(e.kind)).map(eventHTML).join('')}</div><p class="history-note">Score balances normalized cost, speed, reliability and parcel care using the company priority. Reliability = 60% on-time + 40% successful deliveries. Historical evidence equivalent to 40 deliveries smooths feedback; matching-route feedback has full weight, other routes 20%.</p></details>
   ${c?`<div class="detail-section"><h3>${paid?'Payment delivered, too.':c.state==='refunded'?'Payment returned to the store.':'Protected until the parcel arrives.'}</h3><div class="escrow-line"><div><b>Company wallet</b><small>Shipping payer</small></div><span class="flow-arrow">→</span><div class="locked"><b>${money(c.terms.amount)}</b><small>${esc(c.state)} · simulated escrow</small></div><span class="flow-arrow">→</span><div><b>${esc(winner.name)}</b><small>${paid?'Payout complete':'Payout pending'}</small></div></div><p>${paid?'The customer confirmed receipt. The agreed amount has moved from escrow to the partner wallet.':c.state==='disputed'?'The customer reported an issue. Funds stay held until the demo company issues a refund.':c.state==='refunded'?'The held delivery payment has been refunded. This partner received no payout.':'The delivery company reports arrival; the customer confirms receipt. Only then can payment be released.'}</p>
   <div class="escrow-actions"><a class="text-link" href="#track=${o.customerToken}">Open customer tracking ↗</a>${o.status==='needs_funding'?`<button class="secondary" data-action="fund" data-id="${o.id}">Retry escrow funding</button>`:''}${(c.state==='disputed'||(c.state==='funded'&&Date.now()>Date.parse(c.terms.expiresAt)))?`<button class="secondary" data-action="refund" data-id="${o.id}">Refund company wallet</button>`:''}</div>
   ${locked&&c.state==='funded'&&o.stage<4?`<details class="demo-controls"><summary>Try the delivery demo</summary><p>Current stage: ${stageNames[o.stage]}. Simulate the selected partner’s next tracking update.</p><button class="secondary" data-action="advance" data-id="${o.id}">${['Simulate pickup','Move to in transit','Send out for delivery','Report parcel delivered'][o.stage]} →</button></details>`:''}
@@ -71,26 +54,22 @@ async function loadCustomer() {
   $('#customer-detail').innerHTML=`<article class="panel tracking-card"><div class="detail-top"><div><span class="eyebrow">${o.id}</span><h2>${esc(o.origin)} → ${esc(o.destination)}</h2><p>${o.winner?`${esc(o.winner.name)} · Estimated transit ${o.winner.days} days`:'Delivery partner pending'}</p></div><span class="badge">${title(state)}</span></div><div class="journey">${stages.map((name,i)=>`<div class="${i<=o.stage?'done':''}">${i<=o.stage?'●':'○'} ${name}</div>`).join('')}</div>${o.items.map(i=>`<div class="tracking-items"><b>${esc(i.name)}</b><small>Quantity ${i.quantity}</small></div>`).join('')}<div class="tracking-message"><h3>${heading}</h3><p>${message}</p>${state==='awaiting_confirmation'?'<button class="primary" data-customer="confirm">Yes, I received my parcel</button><button class="secondary" data-customer="dispute">There’s a delivery issue</button>':''}${o.stage===4&&!o.feedback?'<button class="text-button" id="open-feedback">Rate this delivery</button>':''}${o.feedback?'<p>✓ Thank you. Your feedback has been saved.</p>':''}</div><button class="text-button" id="refresh-customer" style="margin-top:22px">Refresh tracking ↻</button></article>`;
 }
 async function route() {
-  const version=++routeVersion;const hash=location.hash.slice(1)||'shop';const customer=hash.startsWith('track=');const page=customer?'customer':['shop','platform','connections'].includes(hash)?hash:'shop';
-  closeDialogs();document.body.classList.toggle('customer-mode',customer);
-  ['shop','platform','connections','customer'].forEach(id=>$('#'+id).hidden=id!==page);
-  document.querySelectorAll('[data-nav]').forEach(link=>link.classList.toggle('active',link.dataset.nav===page));
-  window.scrollTo(0,0);
-  try {
-    if(page==='platform'||page==='connections'){await loadDashboard();if(version!==routeVersion)return;page==='platform'?renderPlatform():renderConnections();}
-    if(page==='customer'){customerToken=hash.slice(6);$('#customer-detail').innerHTML='<div class="panel empty">Loading your delivery…</div>';await loadCustomer();}
-  } catch(error) {
-    if(page==='customer')$('#customer-detail').innerHTML='<div class="notice">We couldn’t load that delivery. Check your link and try again.</div>';
-    toast(error.message);
-  }
+ const version=++routeVersion,hash=location.hash.slice(1)||'platform';
+ const page=hash.startsWith('order=')?'order':hash.startsWith('track=')?'customer':hash==='connections'?'connections':'platform';
+ closeDialogs();stopDelivery();clearInterval(pollTimer);if(routeMap){routeMap.remove();routeMap=null;}lastOrder=null;lastSignature=null;
+ ['platform','connections','customer','order'].forEach(id=>$('#'+id).hidden=id!==page);
+ document.querySelectorAll('[data-nav]').forEach(a=>a.classList.toggle('active',a.dataset.nav===page));window.scrollTo(0,0);
+ try{
+  if(page==='order'){journeyId=hash.slice(6);$('#live-order').innerHTML='<div class="panel">Receiving your order…</div>';$('#map-panel').hidden=true;await refreshJourney();pollTimer=setInterval(refreshJourney,1000);}
+  if(page==='platform'||page==='connections'){await loadDashboard();if(version!==routeVersion)return;page==='platform'?renderPlatform():renderConnections();}
+  if(page==='customer'){customerToken=hash.slice(6);await loadCustomer();}
+ }catch(error){toast(error.message);if(page==='order')$('#live-order').innerHTML='<div class="notice">Could not load this order. Check the link and refresh.</div>';}
 }
 document.addEventListener('click',async event=>{
   const b=event.target.closest('button');if(!b)return;
   if(b.dataset.close){$('#'+b.dataset.close).close();return;}
-  if(b.dataset.buy){openCheckout(b.dataset.buy);return;}
-  if(b.dataset.order){selectedOrder=b.dataset.order;renderPlatform();return;}
+  if(b.dataset.order){location.hash='order='+b.dataset.order;return;}
   if(b.dataset.policy){openPolicy(b.dataset.policy);return;}
-  if(b.id==='success-platform'){$('#order-success').close();location.hash='platform';return;}
   if(b.id==='open-feedback'){$('#feedback-form').reset();$('#feedback-dialog').showModal();return;}
   if(b.type==='submit' && b.form)return;
   b.disabled=true;
@@ -101,18 +80,10 @@ document.addEventListener('click',async event=>{
     if(b.dataset.customer){await api('tracking-action',{id:customerOrder.id,token:customerToken,action:b.dataset.customer});await loadCustomer();toast(b.dataset.customer==='confirm'?'Receipt confirmed. Partner payment released.':'Issue reported. Payment is on hold.');}
   }catch(error){toast(error.message);}finally{b.disabled=false;}
 });
-$('#checkout-form').addEventListener('input',()=>{
-  checkoutRequest=crypto.randomUUID();const quantity=Number($('#quantity')?.value||1);$('#checkout-total').textContent=money(catalog.products.find(p=>p.id===productId).price*quantity);
-});
 document.addEventListener('submit',async event=>{
-  const form=event.target;if(!['checkout-form','company-form','partner-form','feedback-form'].includes(form.id))return;
+  const form=event.target;if(!['company-form','partner-form','feedback-form'].includes(form.id))return;
   event.preventDefault();const button=event.submitter;button.disabled=true;const data=Object.fromEntries(new FormData(form));
   try {
-    if(form.id==='checkout-form'){
-      $('#checkout-error').textContent='';button.textContent='Confirming your order…';
-      const result=await api('demo/checkout',{productId,quantity:Number(data.quantity),customerName:data.customerName,address:{line1:data.line1,city:data.city,postalCode:data.postalCode},requestId:checkoutRequest});
-      selectedOrder=result.id;$('#checkout').close();$('#success-summary').textContent=result.id+' · '+title(result.status);$('#success-track').href='#track='+result.customerToken;$('#order-success').showModal();
-    }
     if(form.id==='company-form'){
       $('#company-error').textContent='';
       await api('connections',{id:'company',apiKey:data.apiKey,config:{name:data.name,address:{line1:data.line1,city:data.city,postalCode:data.postalCode},priority:data.priority,maxShipping:Math.round(Number(data.maxShipping)*100),maxDays:Number(data.maxDays)}});
@@ -127,8 +98,44 @@ document.addEventListener('submit',async event=>{
       await api('tracking-action',{id:customerOrder.id,token:customerToken,action:'feedback',rating:Number(data.rating),ontime:data.ontime==='true',success:data.success==='true'});
       $('#feedback-dialog').close();await loadCustomer();toast('Thank you. Future delivery recommendations will use this feedback.');
     }
-  }catch(error){const target={'checkout-form':'checkout-error','company-form':'company-error','partner-form':'partner-error'}[form.id];if(target)$('#'+target).textContent=error.message;else toast(error.message);}
-  finally {button.disabled=false;if(form.id==='checkout-form')button.textContent='Confirm demo order →';}
+  }catch(error){const target={'company-form':'company-error','partner-form':'partner-error'}[form.id];if(target)$('#'+target).textContent=error.message;else toast(error.message);}
+  finally {button.disabled=false;}
 });
+let pollTimer,journeyId,lastOrder,lastSignature,routeMap,parcelMarker,deliveryTimer,deliveryRunning=false,pollBusy=false;
+const stageLabels=['Ready for pickup','Picked up','In transit','Out for delivery','Delivery reported'];
+function stopDelivery(){clearTimeout(deliveryTimer);deliveryRunning=false;}
+async function refreshJourney(){
+ if(pollBusy)return;pollBusy=true;const id=journeyId;
+ try{const o=await api('v1/orders/'+encodeURIComponent(id));if(id!==journeyId||!location.hash.startsWith('#order='))return;lastOrder=o;const signature=JSON.stringify(o);if(signature!==lastSignature){lastSignature=signature;renderJourney(o);}}
+ catch(error){toast('Connection interrupted. Your progress is saved; reconnecting…');}finally{pollBusy=false;}
+}
+function renderJourney(o){
+ const activityOpen=$('#activity')?.open,contractOpen=$('#live-contract')?.open;
+ const kinds=o.events.map(e=>e.kind),c=o.contract,w=o.winner;
+ const steps=[['received','Order confirmed','Everyday sent your order to the Parcelwise API.'],['parsed','Parcel understood',`${o.weight} kg · ${o.length} × ${o.width} × ${o.height} cm · ${o.origin} → ${o.destination}`],['broadcast','Request broadcast','Connected partners receive the route and delivery requirements.'],['offer','Partner agents bidding','Three rounds, each within the partner’s pricing and delivery policy.'],['selected','Deal finalized',w?`${w.name} · ${money(w.pricePaise)} · ${w.days} days`:'Comparing price, speed, reliability and parcel care.'],['contract','Smart contract created','Simulated contract fixes the price and payment-release rules.'],['funded','Escrow funded',c?`${money(c.terms.amount)} from the company wallet, held until receipt.`:'The store’s delivery payment is secured before pickup.']];
+ const completed=kinds.includes('funded'),attention=['needs_attention','needs_funding'].includes(o.status);
+ let active=steps.findIndex(([kind])=>!kinds.includes(kind));if(o.status==='bidding')active=3;if(active<0)active=7;
+ const cards=['A','B','C'].map(id=>{const bids=o.bids.filter(b=>b.partner===id),bid=bids.at(-1),excluded=o.excluded.find(p=>p.id===id);return `<div class="bid-card ${w?.id===id?'selected':''}"><div><span class="agent-avatar">${id}</span><b>Partner ${id}</b>${w?.id===id?'<span class="badge">Selected ✓</span>':''}</div><strong>${bid?money(bid.price):'—'}</strong><p>${bid?`${bid.days} day delivery · Round ${bid.round} of 3`:excluded?esc(excluded.reason):'Waiting for broadcast'}</p><small>${bids.map(b=>money(b.price)).join(' → ')||'Agent standing by'}</small></div>`;}).join('');
+ $('#live-order').innerHTML=`<div class="order-context"><span><b>${o.id}</b> · ${o.items.map(i=>`${i.quantity} × ${esc(i.name)}`).join(', ')}</span><span class="badge">${attention?'Needs attention':completed?title(o.status):'● Arranging your delivery'}</span></div><div class="live-layout"><aside class="panel step-panel"><span class="eyebrow">LIVE DELIVERY WORKFLOW</span><ol class="flow-steps">${steps.map(([kind,name,detail],i)=>`<li class="${i<active?'finished':i===active&&!attention?'current':''}"><span class="step-number">${i<active?'✓':i+1}</span><div><b>${name}</b><p>${esc(detail)}</p></div></li>`).join('')}</ol></aside><div class="live-main"><section class="panel"><div class="detail-top"><div><span class="eyebrow">YOUR DELIVERY TEAM</span><h2>${w?'A deal everyone agrees on.':'Let the partners come to you.'}</h2></div><span class="live-dot">${completed?'✓ Secured':'● Live'}</span></div><div class="bid-grid">${cards}</div>${w?`<div class="deal-strip"><b>${esc(w.name)} wins on ${esc(o.policy.priority)} value</b><span>${money(w.openingPrice-w.pricePaise)} saved through negotiation</span></div>`:`<p class="help">Store policy: up to ${money(o.policy.maxShipping)} · within ${o.policy.maxDays} days · ${esc(o.policy.priority)} priority</p>`}${attention?`<div class="notice">${o.status==='needs_attention'?'No partner met the store’s budget and deadline. No money moved.':'The contract is ready, but the store has insufficient demo credits.'} <a href="#connections">Review settings →</a></div>`:''}</section><section class="panel"><span class="eyebrow">PAYMENT PROTECTION</span><h2>${c?'Agreed. Recorded. Protected.':'A fair deal, then a secure payment.'}</h2><div class="escrow-line"><div><b>Everyday</b><small>Company wallet</small></div><span>→</span><div class="locked"><b>${c?money(c.terms.amount):'—'}</b><small>${c?esc(c.state):'Awaiting contract'} · escrow</small></div><span>→</span><div><b>${w?esc(w.name):'Delivery partner'}</b><small>${c?.state==='released'?'Payment received':'Paid after receipt'}</small></div></div>${c?`<details id="live-contract"><summary>Simulated smart contract · ${c.id}</summary><div class="technical">Terms hash: <code>${c.termsHash}</code><br>Release: ${esc(c.terms.releaseRule)}<br>Simulation only. No blockchain or real money.</div></details>`:'<p class="help">The contract is created after the final deal. No payment moves before that.</p>'}${o.transactions.map(t=>`<div class="ledger-row"><div><b>${esc(t.sender)} → ${esc(t.receiver)}</b><small>${esc(t.id)} · ${esc(t.action)}</small></div><strong>${money(t.amount)}</strong></div>`).join('')}</section><details class="panel" id="activity"><summary>Activity log · ${o.events.length} updates</summary><div class="events">${o.events.slice().reverse().map(eventHTML).join('')}</div></details></div></div>`;
+ if(activityOpen&&$('#activity'))$('#activity').open=true;if(contractOpen&&$('#live-contract'))$('#live-contract').open=true;
+ $('#map-panel').hidden=!completed;
+ if(completed){renderMap(o);$('#map-status').textContent=stageLabels[o.stage]+' · '+o.origin+' → '+o.destination;const button=$('#run-delivery');button.hidden=o.stage>=4||c.state!=='funded';button.textContent=deliveryRunning?'Pause delivery demo':'Run delivery demo →';$('#receipt-actions').innerHTML=o.status==='awaiting_confirmation'?'<div class="tracking-message"><h3>Your parcel has arrived.</h3><p>The partner reported delivery. Confirm receipt to release the simulated escrow payment.</p><button class="primary" data-receipt="confirm">I received my parcel →</button> <button class="secondary" data-receipt="dispute">Report an issue</button></div>':o.status==='completed'?'<div class="tracking-message"><h3>Delivered. And settled.</h3><p>Receipt confirmed. The escrow payment has reached the partner’s wallet.</p><a class="text-link" href="#track='+o.customerToken+'">Rate this delivery →</a></div>':o.status==='disputed'?'<div class="notice">Issue recorded. Escrow remains held for the store to review.</div>':'';}
+}
+function routePoints(o){let a=o.route.pickup,b=o.route.destination;if(a[0]===b[0]&&a[1]===b[1])b=[b[0]+.06,b[1]+.08];return [a,[(a[0]*3+b[0])/4,(a[1]*3+b[1])/4],[(a[0]+b[0])/2+.15,(a[1]+b[1])/2],[(a[0]+b[0]*3)/4,(a[1]+b[1]*3)/4],b];}
+function renderMap(o){
+ if(!window.L){$('#delivery-map').textContent='Map unavailable. Delivery progress is shown above.';return;}
+ const points=routePoints(o);
+ if(!routeMap){routeMap=L.map('delivery-map',{scrollWheelZoom:false}).fitBounds(L.latLngBounds(points),{padding:[35,35],maxZoom:12});L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).on('tileerror',()=>$('#map-note').textContent='Map tiles unavailable. The simulated route is still shown; this is not live GPS.').addTo(routeMap);L.polyline(points,{color:'#749184',weight:4,dashArray:'7 9'}).addTo(routeMap);L.circleMarker(points[0],{radius:7,color:'#315c4b',fillOpacity:1}).addTo(routeMap).bindTooltip('Pickup · '+o.origin);L.circleMarker(points[4],{radius:7,color:'#c68358',fillOpacity:1}).addTo(routeMap).bindTooltip('Destination · '+o.destination);parcelMarker=L.marker(points[o.stage],{icon:L.divIcon({className:'parcel-pin',html:'▣',iconSize:[34,34],iconAnchor:[17,17]})}).addTo(routeMap);setTimeout(()=>routeMap?.invalidateSize(),50);}
+ parcelMarker.setLatLng(points[o.stage]).bindTooltip(stageLabels[o.stage]);
+}
+async function deliveryStep(){
+ if(!deliveryRunning||!lastOrder||lastOrder.stage>=4){stopDelivery();return;}
+ const o=lastOrder;
+ try{await api('demo/order-action',{id:o.id,action:'advance',stage:o.stage+1});await refreshJourney();if(lastOrder?.stage>=4){stopDelivery();return;}if(deliveryRunning)deliveryTimer=setTimeout(deliveryStep,2200);}
+ catch(error){stopDelivery();toast(error.message);}
+}
+$('#run-delivery').addEventListener('click',()=>{if(deliveryRunning){stopDelivery();renderJourney(lastOrder);}else{deliveryRunning=true;renderJourney(lastOrder);deliveryStep();}});
+document.addEventListener('click',async event=>{const b=event.target.closest('[data-receipt]');if(!b)return;b.disabled=true;try{await api('tracking-action',{id:lastOrder.id,token:lastOrder.customerToken,action:b.dataset.receipt});await refreshJourney();}catch(error){toast(error.message);}finally{b.disabled=false;}});
+
 window.addEventListener('hashchange',route);
-(async()=>{try{catalog=await api('catalog');renderProducts();await route();}catch(error){$('#products').innerHTML='<div class="notice">The store couldn’t load. Check that the local server is running, then refresh.</div>';toast(error.message);}})();
+(async()=>{try{catalog=await api('catalog');$('#excluded-cities').innerHTML=catalog.cities.map(c=>`<option>${esc(c)}</option>`).join('');await route();}catch(error){toast(error.message);}})();

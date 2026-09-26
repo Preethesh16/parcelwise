@@ -127,68 +127,97 @@ class Workflow:
             parsed.append(dict(name=title,quantity=quantity,unitPrice=price))
         if weight>100 or height>200: raise ValueError('Combined parcel exceeds demo limits: 100 kg or 200 cm height.')
         return dict(externalId=external,sellerAddress=origin,customerAddress=destination,customerName=str(customer.get('name','Customer'))[:70],items=parsed,productTotal=total,origin=origin['city'],destination=destination['city'],weight=round(weight,3),length=length,width=width,height=height)
-    def ingest(self, payload):
+    def ingest(self, payload, deferred=False):
         if not isinstance(payload,dict): raise ValueError('Order payload must be an object.')
         parsed=self.parse(payload); payload_hash=digest(canonical(payload))
-        # Quotes use smoothed feedback from delivered shipments.
-        cfg=self.configuration(); company=cfg['company']; priorities=company['priority']
-        quote=self.quote_engine(dict(parsed,priority=priorities))
+        cfg=self.configuration(); quote=self.quote_engine(dict(parsed,priority=cfg['company']['priority']))
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             existing=db.execute('SELECT * FROM orders WHERE external_id=?',(parsed['externalId'],)).fetchone()
             if existing:
                 if existing['payload_hash']!=payload_hash: raise ValueError('This orderId was already used with different order details.')
-                order=json.loads(existing['data']);return dict(id=existing['id'],customerToken=existing['token'],status=order['status'],duplicate=True)
-            cfg=self.configuration(db);company=cfg['company']
+                o=json.loads(existing['data']);return dict(id=o['id'],customerToken=existing['token'],status=o['status'],duplicate=True)
             oid='PW-'+uuid.uuid4().hex[:10].upper();token=secrets.token_urlsafe(24)
-            order=dict(id=oid,**parsed,status='negotiating',stage=0,created=now(),events=[],bids=[],excluded=[],contract=None,feedback=None,policy=company,customerToken=token)
-            def event(actor,text,kind='info'): order['events'].append(dict(actor=actor,text=text,kind=kind,at=now()))
-            event('Order endpoint','Confirmed order received. Duplicate delivery protection applied.','received')
-            event('Dispatch agent',f"Parsed pickup in {parsed['origin']}, delivery in {parsed['destination']}, {parsed['weight']} kg, {parsed['length']:g} × {parsed['width']:g} × {parsed['height']:g} cm. Items packed in one stacked parcel.",'parsed')
-            event('Dispatch agent','Broadcast route, parcel measurements, budget and deadline to connected partner agents. Full addresses stay with the selected delivery.','broadcast')
-            final=[]
-            source={p['id']:p for p in quote['partners']}
-            for p in cfg['partners']:
-                carrier=source.get(p['id']);reason=None
-                if not p['enabled']:reason='Connection paused'
-                elif parsed['origin'] in p['excludedCities'] or parsed['destination'] in p['excludedCities']:reason='Route outside partner policy'
-                elif quote['billableWeight']>p['maxWeight']:reason='Parcel exceeds partner weight policy'
-                elif not carrier:reason=next((x['reason'] for x in quote['excluded'] if x['id']==p['id']),'Not eligible')
-                if reason:
-                    order['excluded'].append(dict(id=p['id'],name=p['name'],reason=reason));event(p['name']+' agent',reason,'declined');continue
-                carrier=dict(carrier,days=p.get('deliveryDays',carrier['days']))
-                initial=max(carrier['price']*100,p['minPrice'])
-                floor=max(p['minPrice'],math.ceil(initial*(100-p['maxDiscount'])/100))
-                rounds=[initial,math.ceil((initial+floor)/2),floor]
-                for index,price in enumerate(rounds):
-                    if index:
-                        event('Company agent',f"Counter-request to {p['name']}: {'improve the opening price' if index==1 else 'submit your best final price'} while keeping the {carrier['days']}-day promise. Budget ₹{company['maxShipping']/100:.2f}.",'counter')
-                    order['bids'].append(dict(partner=p['id'],round=index+1,price=price,days=carrier['days']))
-                    event(p['name']+' agent',f"Round {index+1}: ₹{price/100:.2f}, {carrier['days']} days. "+('Opening offer.' if index==0 else 'Concession within our minimum-price and discount policy.'),'offer')
-                score=self.score(floor,carrier,company['priority'])
-                bid=dict(carrier,pricePaise=floor,openingPrice=initial,score=score,minPrice=p['minPrice'],maxDiscount=p['maxDiscount'])
-                if floor<=company['maxShipping'] and carrier['days']<=company['maxDays']:final.append(bid)
-                else: order['excluded'].append(dict(id=p['id'],name=p['name'],reason='Final offer exceeds the company budget or deadline'))
-            final.sort(key=lambda p:(-p['score'],p['pricePaise'],p['id']))
-            order['offers']=final
-            if not final:
-                order['status']='needs_attention';event('Dispatch agent','No acceptable deal meets both the company policy and partner policies. No funds moved.','attention')
-            else:
-                winner=final[0];order['winner']=winner
-                terms=dict(orderId=oid,company='company',partner='partner:'+winner['id'],amount=winner['pricePaise'],currency='INR_DEMO',deliveryDays=winner['days'],releaseRule='Customer confirms receipt after partner delivery report',disputeRule='Hold escrow; demo company may refund',expiresAt=(datetime.now(timezone.utc)+timedelta(days=winner['days']+2)).isoformat())
-                contract=dict(id='SIM-'+uuid.uuid4().hex[:12].upper(),terms=terms,termsHash=digest(canonical(terms)),state='created',mode='simulation',createdAt=now())
-                order['contract']=contract
-                event('Dispatch agent',f"Selected {winner['name']}: ₹{winner['pricePaise']/100:.2f} in {winner['days']} days. Highest normalized {company['priority']} score among offers within policy.",'selected')
-                event('Escrow simulator','Created immutable deal terms. Release requires reported delivery plus customer confirmation.','contract')
-                balance=db.execute('SELECT balance FROM wallets WHERE id=?',('company',)).fetchone()['balance']
-                if balance<winner['pricePaise']:
-                    order['status']='needs_funding';event('Company wallet','Insufficient demo balance. Contract remains unfunded; no funds moved.','attention')
+            o=dict(id=oid,**parsed,status='received',phase=0,stage=0,created=now(),events=[dict(actor='Order endpoint',text='Everyday confirmed the order. Delivery request received through the Parcelwise API.',kind='received',at=now())],bids=[],offers=[],excluded=[],contract=None,feedback=None,policy=cfg['company'],customerToken=token,agentConfig=cfg['partners'],quoteSnapshot=quote,nextAt=(datetime.now(timezone.utc)+timedelta(seconds=2)).isoformat())
+            db.execute('INSERT INTO orders VALUES(?,?,?,?,?,?)',(oid,parsed['externalId'],payload_hash,canonical(o),token,o['created']))
+        if not deferred:
+            for _ in range(8): self.advance_pipeline(oid,force=True)
+            o=self.order(oid)
+        return dict(id=oid,customerToken=token,status=o['status'],duplicate=False)
+
+    def order(self, oid):
+        with self.connect() as db:
+            row=db.execute('SELECT data FROM orders WHERE id=?',(oid,)).fetchone()
+            if row is None: raise ValueError('Order not found.')
+            o=json.loads(row['data'])
+            o['transactions']=[dict(r) for r in db.execute('SELECT * FROM ledger WHERE order_id=? ORDER BY created',(oid,))]
+        o['route']=dict(pickup=self.cities[o['origin']],destination=self.cities[o['destination']])
+        return o
+
+    def tick(self):
+        with self.connect() as db:
+            ids=[r['id'] for r in db.execute("SELECT id FROM orders WHERE json_extract(data,'$.phase') < 8 AND json_extract(data,'$.nextAt') <= ?",(now(),))]
+        for oid in ids: self.advance_pipeline(oid)
+
+    def advance_pipeline(self, oid, force=False):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row=db.execute('SELECT data FROM orders WHERE id=?',(oid,)).fetchone()
+            if row is None: raise ValueError('Order not found.')
+            o=json.loads(row['data']);phase=o.get('phase',8)
+            if phase>=8 or (not force and o['nextAt']>now()): return
+            company=o['policy']
+            def event(actor,text,kind): o['events'].append(dict(actor=actor,text=text,kind=kind,at=now()))
+            if phase==0:
+                o['status']='parsed'
+                event('Dispatch agent',f"Parsed pickup in {o['origin']}, delivery in {o['destination']}, {o['weight']} kg, {o['length']:g} × {o['width']:g} × {o['height']:g} cm.",'parsed')
+            elif phase==1:
+                o['status']='broadcasting';o['candidates']=[]
+                quote=o['quoteSnapshot'];source={p['id']:p for p in quote['partners']}
+                event('Company agent','Broadcast route, parcel size, budget and deadline to connected partner agents.','broadcast')
+                for p in o['agentConfig']:
+                    carrier=source.get(p['id']);reason=None
+                    if not p['enabled']: reason='Connection paused'
+                    elif o['origin'] in p['excludedCities'] or o['destination'] in p['excludedCities']: reason='Route outside partner policy'
+                    elif quote['billableWeight']>p['maxWeight']: reason='Parcel exceeds partner weight policy'
+                    elif not carrier: reason='Carrier does not serve this parcel or route'
+                    if reason:
+                        o['excluded'].append(dict(id=p['id'],name=p['name'],reason=reason));event(p['name']+' agent',reason,'declined');continue
+                    initial=max(carrier['price']*100,p['minPrice']);floor=max(p['minPrice'],math.ceil(initial*(100-p['maxDiscount'])/100))
+                    o['candidates'].append(dict(carrier,days=p['deliveryDays'],openingPrice=initial,pricePaise=floor,minPrice=p['minPrice'],maxDiscount=p['maxDiscount']))
+            elif phase in [2,3,4]:
+                o['status']='bidding';round_number=phase-1
+                if round_number>1:event('Company agent','Requesting '+('improved offers' if round_number==2 else 'best final offers')+' within the agreed delivery deadline.','counter')
+                for p in o['candidates']:
+                    price=[p['openingPrice'],math.ceil((p['openingPrice']+p['pricePaise'])/2),p['pricePaise']][round_number-1]
+                    o['bids'].append(dict(partner=p['id'],round=round_number,price=price,days=p['days']))
+                    event(p['name']+' agent',f"Round {round_number}: ₹{price/100:.2f}, {p['days']} days. Offer respects our price floor and concession policy.",'offer')
+            elif phase==5:
+                final=[]
+                for p in o['candidates']:
+                    if p['pricePaise']<=company['maxShipping'] and p['days']<=company['maxDays']:
+                        p['score']=self.score(p['pricePaise'],p,company['priority']);final.append(p)
+                    else:o['excluded'].append(dict(id=p['id'],name=p['name'],reason='Final offer exceeds company budget or deadline'))
+                final.sort(key=lambda p:(-p['score'],p['pricePaise'],p['id']));o['offers']=final
+                if not final:
+                    o['status']='needs_attention';phase=7
+                    event('Dispatch agent','No acceptable deal meets company and partner policies. No funds moved.','attention')
                 else:
-                    self.transfer(db,oid,'fund','company','escrow',winner['pricePaise'])
-                    contract['state']='funded';order['status']='booked';event('Company wallet',f"Locked ₹{winner['pricePaise']/100:.2f} in simulated escrow. Partner payout is pending delivery.",'funded')
-                    self.create_shipment(db,order)
-            db.execute('INSERT INTO orders VALUES(?,?,?,?,?,?)',(oid,parsed['externalId'],payload_hash,canonical(order),token,order['created']))
-            return dict(id=oid,customerToken=token,status=order['status'],duplicate=False)
+                    o['winner']=final[0];o['status']='deal_finalized'
+                    event('Company agent',f"Deal finalized with {final[0]['name']}: ₹{final[0]['pricePaise']/100:.2f}, {final[0]['days']} days. Best {company['priority']} match within policy.",'selected')
+            elif phase==6:
+                winner=o['winner'];terms=dict(orderId=oid,company='company',partner='partner:'+winner['id'],amount=winner['pricePaise'],currency='INR_DEMO',deliveryDays=winner['days'],releaseRule='Customer confirms receipt after partner delivery report',disputeRule='Hold escrow; demo company may refund',expiresAt=(datetime.now(timezone.utc)+timedelta(days=winner['days']+2)).isoformat())
+                o['contract']=dict(id='SIM-'+uuid.uuid4().hex[:12].upper(),terms=terms,termsHash=digest(canonical(terms)),state='created',mode='simulation',createdAt=now());o['status']='contract_created'
+                event('Contract simulator','Created a simulated smart contract with fixed deal terms. Awaiting escrow funding.','contract')
+            elif phase==7:
+                amount=o['winner']['pricePaise']
+                if db.execute("SELECT balance FROM wallets WHERE id='company'").fetchone()['balance']<amount:
+                    o['status']='needs_funding';event('Company wallet','Insufficient demo credits. Contract remains unfunded.','attention')
+                else:
+                    self.transfer(db,oid,'fund','company','escrow',amount);o['contract']['state']='funded';o['status']='booked';self.create_shipment(db,o)
+                    event('Company wallet',f"Transferred ₹{amount/100:.2f} into simulated escrow. Ready for pickup; payout waits for customer confirmation.",'funded')
+            o['phase']=phase+1;o['nextAt']=(datetime.now(timezone.utc)+timedelta(seconds=2.5)).isoformat()
+            db.execute('UPDATE orders SET data=? WHERE id=?',(canonical(o),oid))
     @staticmethod
     def score(price,p,priority):
         weights={'balanced':[.35,.25,.25,.15],'price':[.8,.1,.05,.05],'speed':[.15,.65,.1,.1],'reliability':[.1,.1,.55,.25]}[priority]

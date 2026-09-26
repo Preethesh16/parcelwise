@@ -1,3 +1,4 @@
+import threading, time, logging
 import argparse, json, math, os, sqlite3, uuid
 from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -84,6 +85,9 @@ class Handler(SimpleHTTPRequestHandler):
     def respond(self,data,status=200):
         body=json.dumps(data).encode(); self.send_response(status); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
     def do_GET(self):
+        if self.path.startswith('/api/v1/orders/'):
+            try: return self.respond(flow.order(self.path.removeprefix('/api/v1/orders/')))
+            except ValueError as error: return self.respond(dict(error=str(error)),404)
         if self.path=='/api/catalog': return self.respond(flow.catalog())
         if self.path=='/api/platform': return self.respond(flow.dashboard())
         if self.path.startswith('/api/tracking/'):
@@ -105,6 +109,9 @@ class Handler(SimpleHTTPRequestHandler):
             if not isinstance(d,dict): raise ValueError('Expected a JSON object.')
             if self.path=='/api/demo/checkout': return self.respond(flow.checkout(d),201)
             if self.path=='/api/connections': return self.respond(flow.save_config(d))
+            if self.path=='/api/v1/orders':
+                if not flow.authorized('company',self.headers.get('X-API-Key')): raise PermissionError('Invalid company API key.')
+                return self.respond(flow.ingest(d,deferred=True),202)
             if self.path=='/api/integrations/orders':
                 if not flow.authorized('company',self.headers.get('X-API-Key')): raise PermissionError('Invalid company API key.')
                 return self.respond(flow.ingest(d),201)
@@ -145,7 +152,14 @@ class Handler(SimpleHTTPRequestHandler):
         except PermissionError as e: self.respond(dict(error=str(e)),401)
         except (ValueError,TypeError,KeyError) as e: self.respond(dict(error=str(e)),400)
 
+def worker():
+    while True:
+        try: flow.tick()
+        except Exception: logging.exception('Workflow worker failed; will retry persisted jobs')
+        time.sleep(.4)
+
 if __name__=='__main__':
-    parser=argparse.ArgumentParser(); parser.add_argument('--port',type=int,default=8000); args=parser.parse_args(); init(); flow.init()
+    parser=argparse.ArgumentParser(); parser.add_argument('--port',type=int,default=8001); args=parser.parse_args(); init(); flow.init()
+    threading.Thread(target=worker,daemon=True).start()
     print(f'Parcelwise running at http://localhost:{args.port}',flush=True)
     ThreadingHTTPServer(('127.0.0.1',args.port),Handler).serve_forever()
