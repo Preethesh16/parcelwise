@@ -36,4 +36,4 @@ $('#checkout-form').addEventListener('submit',async event=>{
  try{const result=await api('checkout',{productId,quantity:Number(d.quantity),customerName:d.customerName,address:{line1:d.line1,city:d.city,postalCode:d.postalCode},requestId:checkoutRequest});location.assign(result.redirectUrl);}
  catch(error){$('#checkout-error').textContent=error.message;button.disabled=false;button.textContent='Retry confirmation →';}
 });
-(async()=>{try{catalog=await api('catalog');renderProducts();const config=await api('config');document.querySelectorAll('[data-platform-link]').forEach(a=>a.href=config.parcelwiseUrl);}catch(error){toast(error.message);}})();
+(async()=>{try{catalog=await api('catalog');renderProducts();}catch(error){toast(error.message);}})();
