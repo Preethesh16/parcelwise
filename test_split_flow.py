@@ -50,6 +50,38 @@ class SplitFlowTests(unittest.TestCase):
    with sqlite3.connect(storefront.DB) as db:self.assertEqual({r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")},{'checkouts'})
   finally:
    for http in [api,shop]:http.shutdown();http.server_close()
+ def test_chat_turns_are_saved_individually_and_resume(self):
+  r=server.flow.ingest(self.payload,deferred=True);oid=r['id']
+  for _ in range(2):server.flow.advance_pipeline(oid,force=True)
+  def due_tick():
+   with server.connect() as db:
+    o=json.loads(db.execute('SELECT data FROM orders WHERE id=?',(oid,)).fetchone()['data']);o['nextAt']='2000-01-01';db.execute('UPDATE orders SET data=? WHERE id=?',(canonical(o),oid))
+   server.flow.tick()
+  due_tick();o=server.flow.order(oid)
+  self.assertEqual(o['phase'],2);self.assertEqual(o['chatCursor'],1);self.assertEqual(o['bids'],[])
+  self.assertIn('My policy allows',o['events'][-1]['text'])
+  server.flow.init();due_tick();o=server.flow.order(oid)
+  self.assertEqual(len(o['bids']),1);self.assertEqual(o['chatCursor'],2)
+  self.assertIn('My policy:',o['events'][-1]['text']);self.assertEqual(o['transactions'],[])
+  for _ in range(2):due_tick()
+  self.assertEqual(server.flow.order(oid)['phase'],3)
+ def test_company_policy_changes_counters_and_partner_respects_floor(self):
+  results={}
+  for priority in ['price','speed']:
+   cfg=server.flow.configuration()['company'];cfg['priority']=priority;cfg['maxShipping']=25000
+   server.flow.save_config(dict(id='company',config=cfg))
+   payload=copy.deepcopy(self.payload);payload['orderId']='policy-'+priority
+   r=server.flow.ingest(payload);o=server.flow.order(r['id']);results[priority]=o
+   for partner in o['agentConfig']:
+    bids=[b for b in o['bids'] if b['partner']==partner['id']]
+    if not bids:continue
+    self.assertTrue(all(b['price']>=partner['minPrice'] for b in bids))
+    self.assertGreaterEqual(bids[-1]['price'],bids[0]['price']*(100-partner['maxDiscount'])/100)
+    self.assertLessEqual(bids[-1]['price'],bids[0]['price'])
+   self.assertTrue(any('My '+priority+' policy requests' in e['text'] for e in o['events']))
+  price={b['partner']:b['price'] for b in results['price']['bids'] if b['round']==2}
+  speed={b['partner']:b['price'] for b in results['speed']['bids'] if b['round']==2}
+  self.assertTrue(any(price[p]<speed[p] for p in price))
  def test_changed_retry_is_rejected(self):
   r=server.flow.ingest(self.payload,deferred=True)
   self.assertEqual(server.flow.ingest(self.payload,deferred=True)['id'],r['id'])

@@ -187,17 +187,51 @@ class Workflow:
                     o['candidates'].append(dict(carrier,days=p['deliveryDays'],openingPrice=initial,pricePaise=floor,minPrice=p['minPrice'],maxDiscount=p['maxDiscount']))
             elif phase in [2,3,4]:
                 o['status']='bidding';round_number=phase-1
-                if round_number>1:event('Company agent','Requesting '+('improved offers' if round_number==2 else 'best final offers')+' within the agreed delivery deadline.','counter')
-                for p in o['candidates']:
-                    price=[p['openingPrice'],math.ceil((p['openingPrice']+p['pricePaise'])/2),p['pricePaise']][round_number-1]
-                    o['bids'].append(dict(partner=p['id'],round=round_number,price=price,days=p['days']))
-                    event(p['name']+' agent',f"Round {round_number}: ₹{price/100:.2f}, {p['days']} days. Offer respects our price floor and concession policy.",'offer')
+                # Persist one conversational turn per worker tick, including its actual bid.
+                # Force mode drains one round for synchronous callers and deterministic tests.
+                if o.get('chatRound')!=round_number:
+                    o['chatRound']=round_number;o['chatCursor']=0;o['chatQueue']=[]
+                    queue=o['chatQueue']
+                    def say(actor,text,kind='counter',bid=None):
+                        queue.append(dict(actor=actor,text=text,kind=kind,bid=bid))
+                    if round_number==1:
+                        say('Company agent',f"I’m shipping {o['weight']} kg from {o['origin']} to {o['destination']}. My policy allows at most ₹{company['maxShipping']/100:.2f} and {company['maxDays']} days. My priority is {company['priority']}. Please quote within those limits.")
+                    for p in o['candidates']:
+                        initial=p['openingPrice'];floor=p['pricePaise']
+                        if round_number==1:
+                            price=initial
+                            text=f"My opening offer is ₹{price/100:.2f} with a {p['days']}-day promise. My policy: minimum ₹{p['minPrice']/100:.2f}, maximum concession {p['maxDiscount']}%."
+                        else:
+                            previous=next(b['price'] for b in reversed(o['bids']) if b['partner']==p['id'])
+                            concession={'price':.15,'balanced':.10,'speed':.05,'reliability':.05}[company['priority']]
+                            target=min(company['maxShipping'],math.floor(previous*(1-concession)))
+                            say('Company agent',f"{p['name']}, {'can you accept my final counter of' if round_number==3 else 'can you meet'} ₹{target/100:.2f}? My {company['priority']} policy requests a {concession*100:g}% improvement, capped by my ₹{company['maxShipping']/100:.2f} budget. I still require delivery within {company['maxDays']} days.")
+                            # The partner concedes toward the actual company counter, bounded
+                            # by its floor and total discount policy. Never raise an earlier bid.
+                            price=max(floor,min(previous,target))
+                            text=f"{'Final offer' if round_number==3 else 'Counteroffer'}: ₹{price/100:.2f}, {p['days']} days. "
+                            text+=(f"I cannot reach ₹{target/100:.2f}: my effective floor is ₹{floor/100:.2f} (minimum price and {p['maxDiscount']}% maximum discount). " if target<floor else 'I can meet that price within my policy. ')
+                            text+=(f"I cannot promise your {company['maxDays']}-day deadline; my transit policy requires {p['days']} days." if p['days']>company['maxDays'] else 'My transit promise meets your deadline.')
+                        say(p['name']+' agent',text,'offer',dict(partner=p['id'],round=round_number,price=price,days=p['days']))
+                    if not queue:say('Company agent','No connected partner can serve this parcel and route.','counter')
+                queue=o['chatQueue'];start=o['chatCursor'];end=len(queue) if force else start+1
+                for message in queue[start:end]:
+                    event(message['actor'],message['text'],message['kind'])
+                    if message['bid']:
+                        o['bids'].append(message['bid'])
+                        if round_number==3:
+                            for candidate in o['candidates']:
+                                if candidate['id']==message['bid']['partner']:candidate['pricePaise']=message['bid']['price']
+                o['chatCursor']=end
+                if end<len(queue):phase-=1
             elif phase==5:
                 final=[]
                 for p in o['candidates']:
                     if p['pricePaise']<=company['maxShipping'] and p['days']<=company['maxDays']:
                         p['score']=self.score(p['pricePaise'],p,company['priority']);final.append(p)
-                    else:o['excluded'].append(dict(id=p['id'],name=p['name'],reason='Final offer exceeds company budget or deadline'))
+                    else:
+                        o['excluded'].append(dict(id=p['id'],name=p['name'],reason='Final offer exceeds company budget or deadline'))
+                        event('Company agent',f"{p['name']}, I cannot accept ₹{p['pricePaise']/100:.2f} in {p['days']} days. My policy caps price at ₹{company['maxShipping']/100:.2f} and transit at {company['maxDays']} days.",'counter')
                 final.sort(key=lambda p:(-p['score'],p['pricePaise'],p['id']));o['offers']=final
                 if not final:
                     o['status']='needs_attention';phase=7
@@ -216,7 +250,7 @@ class Workflow:
                 else:
                     self.transfer(db,oid,'fund','company','escrow',amount);o['contract']['state']='funded';o['status']='booked';self.create_shipment(db,o)
                     event('Company wallet',f"Transferred ₹{amount/100:.2f} into simulated escrow. Ready for pickup; payout waits for customer confirmation.",'funded')
-            o['phase']=phase+1;o['nextAt']=(datetime.now(timezone.utc)+timedelta(seconds=2.5)).isoformat()
+            o['phase']=phase+1;o['nextAt']=(datetime.now(timezone.utc)+timedelta(seconds=2.4 if o['status']=='bidding' else 4)).isoformat()
             db.execute('UPDATE orders SET data=? WHERE id=?',(canonical(o),oid))
     @staticmethod
     def score(price,p,priority):
