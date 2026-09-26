@@ -311,3 +311,31 @@ footer { max-width:none; margin-inline:clamp(24px,4vw,68px); }
 .delivery-stages .reached>span { background:#eaf2dd; border-color:#d2e2bc; }
 .parcel-pin { display:grid; place-items:center; background:#2c543e; }
 @media(max-width:740px) { .delivery-stages { gap:5px; } .delivery-stages b { font-size:8px; } .delivery-stages>div:not(:last-child):after { left:31px; } }
+/* A single, uninterrupted journey: network first, delivery last. */
+.journey-page main { max-width:1260px; padding-top:26px; }
+.journey-page .live-layout { display:block; }
+.journey-page .live-main { gap:28px; }
+.journey-page #map-panel { margin-left:0; margin-top:28px; }
+.journey-page .live-main>.panel { padding:30px 34px; }
+.journey-page .dispatch-topology { height:clamp(240px,34vh,340px); }
+.journey-page .dispatch-visual { margin-top:18px; }
+.journey-page .broadcast-scene details { margin-top:18px; padding-top:16px; }
+.broadcast-controls { display:flex; gap:12px; align-items:center; }
+.broadcast-controls #auto-follow { padding:7px 11px; font-size:9px; }
+.journey-page .contract-and-funds { grid-template-columns:1fr 1fr; gap:48px; }
+.journey-page .funding-visual { width:100%; max-width:420px; justify-self:center; }
+.journey-page .agent-chat { height:clamp(360px,52vh,530px); }
+.journey-page .chat-waiting { height:240px; }
+.journey-page #delivery-map { height:clamp(320px,52vh,540px); }
+.map-handoff { display:flex; align-items:center; justify-content:center; gap:10px; padding:16px; margin:20px 0 0; border:1px solid #dce8cd; border-radius:9px; background:#f0f6e8; color:#6b8650; font-size:12px; }
+#broadcast-scene,#negotiation-scene,#contract-scene,#map-panel { scroll-margin-top:24px; }
+@media(max-width:740px) {
+ .journey-page main { padding-top:18px; }
+ .journey-page .live-main>.panel { padding:22px 18px; }
+ .journey-page .broadcast-scene .detail-top { align-items:flex-start; flex-direction:column; gap:14px; }
+ .broadcast-controls { width:100%; justify-content:space-between; }
+ .journey-page .dispatch-topology { height:250px; }
+ .journey-page .contract-and-funds { grid-template-columns:1fr; gap:26px; }
+ .journey-page .chat-waiting { height:240px; }
+ .map-handoff { font-size:11px; line-height:1.8; }
+}
