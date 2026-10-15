@@ -15,7 +15,17 @@ class WorkflowTests(unittest.TestCase):
         server.init();server.flow.init();self.flow=server.flow
     def tearDown(self): self.tmp.cleanup()
     def checkout(self,request='test-order-001'):
-        return self.flow.checkout(dict(productId='bag',quantity=1,customerName='Demo Customer',address=dict(line1='24 Lake Road',city='Bengaluru',postalCode='560001'),requestId=request))
+        r=self.flow.checkout(dict(productId='bag',quantity=1,customerName='Demo Customer',address=dict(line1='24 Lake Road',city='Bengaluru',postalCode='560001'),requestId=request))
+        self.approve(r)
+        r['status']=self.flow.order(r['id'])['status']
+        return r
+    def approve(self,r):
+        self.flow.action(r['id'],'negotiate')
+        for _ in range(6):self.flow.advance_pipeline(r['id'],force=True)
+        o=self.flow.order(r['id'])
+        if o['offers']:
+            self.flow.action(r['id'],'select',dict(partnerId=o['offers'][0]['id']))
+            for _ in range(2):self.flow.advance_pipeline(r['id'],force=True)
     def order(self,result): return next(o for o in self.flow.dashboard()['orders'] if o['id']==result['id'])
     def delivered(self,r):
         for _ in range(4):self.flow.action(r['id'],'advance')
@@ -35,9 +45,10 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.flow.action(r['id'],'feedback',dict(rating=5,ontime=True,success=True),token=r['customerToken'])
         self.assertEqual(self.order(r)['contract']['termsHash'],o['contract']['termsHash'])
     def test_duplicate_checkout_atomic(self):
-        with ThreadPoolExecutor(max_workers=4) as executor:results=list(executor.map(lambda _:self.checkout(),range(4)))
+        payload=json.loads(Path('static/api-example.json').read_text())
+        with ThreadPoolExecutor(max_workers=4) as executor:results=list(executor.map(lambda _:self.flow.ingest(payload),range(4)))
         self.assertEqual(len({r['id'] for r in results}),1)
-        self.assertEqual(len(self.flow.dashboard()['ledger']),1)
+        self.assertEqual(len(self.flow.dashboard()['ledger']),0)
     def test_policy_floors_and_discounts(self):
         r=self.checkout();o=self.order(r)
         cfg={p['id']:p for p in self.flow.configuration()['partners']}
@@ -120,6 +131,7 @@ class WorkflowTests(unittest.TestCase):
             r=post('integrations/orders',payload,'demo-company-key')
             duplicate=post('integrations/orders',payload,'demo-company-key')
             self.assertEqual(r['id'],duplicate['id']);self.assertTrue(duplicate['duplicate'])
+            self.approve(r)
             winner=self.order(r)['winner']['id']
             event=dict(orderId=r['id'],partnerId=winner,stage=1)
             post('integrations/delivery',event,'demo-partner-'+winner+'-key')

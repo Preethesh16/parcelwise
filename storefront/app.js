@@ -30,7 +30,15 @@ function openCheckout(id) {
   const p=catalog.products.find(p=>p.id===id);productId=id;checkoutRequest=crypto.randomUUID();
   $('#checkout-form').reset();$('#checkout-city').value='Bengaluru';$('#checkout-error').textContent='';
   $('#checkout-product').innerHTML=`<div class="checkout-item"><div><b>${esc(p.name)}</b><small>${money(p.price)} each · Delivery arranged by the store</small></div><label>Qty<select name="quantity" id="quantity">${[1,2,3,4,5].map(n=>`<option>${n}</option>`).join('')}</select></label></div>`;
-  $('#checkout-total').textContent=money(p.price);$('#checkout').showModal();
+  $('#checkout-total').textContent=money(p.price);
+  if(!$('#delivery-needs')){
+    const needs=document.createElement('div');needs.id='delivery-needs';needs.className='form-grid';
+    needs.innerHTML='<label>Deliver within<select name="maxDays"><option value="5">5 days</option><option value="3">3 days</option><option value="2">2 days</option><option value="7">7 days</option></select></label><label>Handling<select name="fragile"><option value="false">Standard</option><option value="true">Fragile item</option></select></label>';
+    $('#checkout-total').parentElement.before(needs);
+  }
+  $('#checkout-form').elements.fragile.value=id==='lamp'?'true':'false';
+  $('#checkout-form').elements.fragile.disabled=id==='lamp';
+  $('#checkout').showModal();
 }
 
 document.addEventListener('click',event=>{const b=event.target.closest('button');if(b?.dataset.buy)openCheckout(b.dataset.buy);if(b?.dataset.close)$('#'+b.dataset.close).close();});
@@ -38,7 +46,7 @@ $('#checkout-form').addEventListener('input',()=>{checkoutRequest=crypto.randomU
 $('#checkout-form').addEventListener('submit',async event=>{
  event.preventDefault();const button=event.submitter;button.disabled=true;button.textContent='Confirming & opening Parcelwise…';$('#checkout-error').textContent='';
  const d=Object.fromEntries(new FormData(event.target));
- try{const result=await api('checkout',{productId,quantity:Number(d.quantity),customerName:d.customerName,address:{line1:d.line1,city:d.city,postalCode:d.postalCode},requestId:checkoutRequest});location.assign(result.redirectUrl);}
+ try{const result=await api('checkout',{productId,quantity:Number(d.quantity),customerName:d.customerName,maxDays:Number(d.maxDays),fragile:productId==='lamp'||d.fragile==='true',address:{line1:d.line1,city:d.city,postalCode:d.postalCode},requestId:checkoutRequest});location.assign(result.redirectUrl);}
  catch(error){$('#checkout-error').textContent=error.message;button.disabled=false;button.textContent='Retry confirmation →';}
 });
 (async()=>{try{catalog=await api('catalog');renderProducts();}catch(error){toast(error.message);}})();

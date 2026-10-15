@@ -77,19 +77,46 @@ def shipments():
     with connect() as db: rows=db.execute('SELECT * FROM shipments ORDER BY created DESC').fetchall()
     return [dict(id=r['id'],**json.loads(r['data']),stage=r['stage'],status=STAGES[r['stage']],created=r['created'],feedback=json.loads(r['feedback']) if r['feedback'] else None) for r in rows]
 
+import portal_auth
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self,*args,**kwargs): super().__init__(*args,directory=str(ROOT/'static'),**kwargs)
     def end_headers(self):
         self.send_header('Cache-Control','no-store')
         super().end_headers()
-    def respond(self,data,status=200):
-        body=json.dumps(data).encode(); self.send_response(status); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
+    def respond(self,data,status=200,cookie=None):
+        body=json.dumps(data).encode(); self.send_response(status); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(body)))
+        if cookie: self.send_header('Set-Cookie',cookie)
+        self.end_headers(); self.wfile.write(body)
+    def require_account(self,account=None):
+        current=portal_auth.identity(self.headers)
+        if not current or (account and current!=account): raise PermissionError('Sign in to the appropriate portal to continue.')
+        return current
+    def portal_order(self,order,account):
+        if account!='company':
+            if order.get('winner',{}).get('id')!=account.split(':')[1]: raise PermissionError('This delivery is not assigned to your account.')
+            for field in ['customerToken','transactions','agentConfig','quoteSnapshot','bids','offers','candidates','chatQueue']:
+                order.pop(field,None)
+            order['bids']=[];order['offers']=[]
+        return order
     def do_GET(self):
+        if self.path=='/api/session': return self.respond(dict(account=portal_auth.identity(self.headers)))
+        if self.path in ['/api/platform','/api/shipments'] or self.path.startswith('/api/v1/orders/'):
+            try: self.require_account('company' if self.path.startswith('/api/shipments') else None)
+            except PermissionError as error: return self.respond(dict(error=str(error)),401)
         if self.path.startswith('/api/v1/orders/'):
-            try: return self.respond(flow.order(self.path.removeprefix('/api/v1/orders/')))
+            try: return self.respond(self.portal_order(flow.order(self.path.removeprefix('/api/v1/orders/')),self.require_account()))
+            except PermissionError as error: return self.respond(dict(error=str(error)),403)
             except ValueError as error: return self.respond(dict(error=str(error)),404)
         if self.path=='/api/catalog': return self.respond(flow.catalog())
-        if self.path=='/api/platform': return self.respond(flow.dashboard())
+        if self.path=='/api/platform':
+            account=self.require_account();result=flow.dashboard()
+            if account!='company':
+                pid=account.split(':')[1]
+                result['orders']=[self.portal_order(o,account) for o in result['orders'] if o.get('winner',{}).get('id')==pid]
+                result['config']['partners']=[p for p in result['config']['partners'] if p['id']==pid]
+                result['config']['company']={};result['wallets']={};result['ledger']=[]
+            return self.respond(result)
         if self.path.startswith('/api/tracking/'):
             try: return self.respond(flow.tracking(self.path.removeprefix('/api/tracking/')))
             except ValueError as error: return self.respond(dict(error=str(error)),404)
@@ -107,6 +134,16 @@ class Handler(SimpleHTTPRequestHandler):
             if not 0<size<=30000: raise ValueError('Request too large.')
             d=json.loads(self.rfile.read(size))
             if not isinstance(d,dict): raise ValueError('Expected a JSON object.')
+            if self.path in ['/api/login','/api/logout','/api/connections','/api/demo/order-action','/api/demo/partner-action']:
+                if self.headers.get('Origin') not in [None,'http://'+self.headers.get('Host','')]: raise PermissionError('Cross-origin portal requests are not allowed.')
+            if self.path=='/api/login':
+                account=d.get('account')
+                if account not in ['company','partner:A','partner:B','partner:C'] or not flow.authorized(account,d.get('key')): raise PermissionError('Account or access key is incorrect.')
+                return self.respond(dict(account=account),cookie=portal_auth.create(account,self.headers))
+            if self.path=='/api/logout': return self.respond(dict(ok=True),cookie=portal_auth.logout(self.headers))
+            if self.path=='/api/connections': self.require_account(d.get('id') or 'company')
+            if self.path=='/api/demo/order-action': self.require_account('company')
+            if self.path=='/api/demo/partner-action': self.require_account('partner:'+str(d.get('partnerId')))
             if self.path=='/api/demo/checkout': return self.respond(flow.checkout(d),201)
             if self.path=='/api/connections': return self.respond(flow.save_config(d))
             if self.path=='/api/v1/orders':
@@ -121,8 +158,12 @@ class Handler(SimpleHTTPRequestHandler):
                 if 'stage' not in d: raise ValueError('An explicit stage is required for retry-safe tracking updates.')
                 return self.respond(flow.action(d.get('orderId'),'advance',d,partner=partner))
             if self.path=='/api/demo/order-action':
-                if d.get('action') not in ['advance','refund','fund']: raise ValueError('Unsupported demo action.')
+                if d.get('action') not in ['advance','refund','fund','negotiate','select']: raise ValueError('Unsupported demo action.')
                 return self.respond(flow.action(d.get('id'),d['action'],d))
+            if self.path=='/api/demo/partner-action':
+                if d.get('partnerId') not in ['A','B','C']: raise ValueError('Choose a partner.')
+                if 'stage' not in d: raise ValueError('A delivery stage is required.')
+                return self.respond(flow.action(d.get('orderId'),'advance',d,partner=d['partnerId']))
             if self.path=='/api/tracking-action':
                 if d.get('action') not in ['confirm','dispute','feedback']: raise ValueError('Unsupported customer action.')
                 return self.respond(flow.action(d.get('id'),d['action'],d,token=d.get('token')))

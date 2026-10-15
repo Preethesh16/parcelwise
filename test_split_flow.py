@@ -14,18 +14,23 @@ class SplitFlowTests(unittest.TestCase):
  def tearDown(self):server.DB=self.old_db;storefront.DB=self.old_store;self.temp.cleanup()
  def test_each_phase_is_persisted_before_funding(self):
   r=server.flow.ingest(self.payload,deferred=True);oid=r['id']
-  self.assertEqual(r['status'],'received');self.assertEqual(server.flow.dashboard()['ledger'],[])
-  for expected in ['parsed','broadcasting','bidding','bidding','bidding','deal_finalized','contract_created']:
+  self.assertEqual(r['status'],'awaiting_seller');self.assertEqual(server.flow.dashboard()['ledger'],[])
+  server.flow.action(oid,'negotiate')
+  for expected in ['parsed','broadcasting','bidding','bidding','bidding','awaiting_selection']:
    server.flow.advance_pipeline(oid,force=True);o=server.flow.order(oid)
    self.assertEqual(o['status'],expected);self.assertEqual(o['transactions'],[])
-  self.assertEqual(len(o['bids']),9);self.assertEqual(o['contract']['state'],'created')
+  self.assertEqual(len(o['bids']),9);self.assertIsNone(o['contract'])
+  server.flow.action(oid,'select',dict(partnerId=o['offers'][0]['id']))
+  server.flow.advance_pipeline(oid,force=True)
+  self.assertEqual(server.flow.order(oid)['contract']['state'],'created')
   restored=Workflow(server.connect,server.quotes,server.CITIES);restored.init()
   with ThreadPoolExecutor(max_workers=4) as ex:list(ex.map(lambda _:restored.advance_pipeline(oid,force=True),range(4)))
   o=restored.order(oid);self.assertEqual(o['status'],'booked');self.assertEqual(len(o['transactions']),1)
   self.assertEqual(sum(restored.dashboard()['wallets'].values()),1000000)
   self.assertEqual(o['route']['pickup'],server.CITIES[o['origin']])
  def test_scheduler_waits_and_recovers_pending_work(self):
-  r=server.flow.ingest(self.payload,deferred=True);server.flow.tick();self.assertEqual(server.flow.order(r['id'])['phase'],0)
+  r=server.flow.ingest(self.payload,deferred=True);server.flow.tick();self.assertEqual(server.flow.order(r['id'])['phase'],8)
+  server.flow.action(r['id'],'negotiate')
   with server.connect() as db:
    o=server.flow.order(r['id']);o['nextAt']='2000-01-01';db.execute('UPDATE orders SET data=? WHERE id=?',(canonical(o),r['id']))
   server.flow.tick();self.assertEqual(server.flow.order(r['id'])['phase'],1)
@@ -40,18 +45,19 @@ class SplitFlowTests(unittest.TestCase):
    with patch.object(storefront,'API','http://127.0.0.1:1'):
     with self.assertRaises(urllib.error.HTTPError) as err:purchase()
     self.assertEqual(err.exception.code,503)
-   with sqlite3.connect(storefront.DB) as db:self.assertEqual(db.execute('SELECT count(*) FROM checkouts').fetchone()[0],1)
+   with storefront.connect() as db:self.assertEqual(db.execute('SELECT count(*) FROM checkouts').fetchone()[0],1)
    self.assertEqual(server.flow.dashboard()['orders'],[])
    with patch.object(storefront,'API',f'http://127.0.0.1:{api.server_port}'):
     first=purchase();second=purchase()
-   self.assertEqual(first,second);self.assertEqual(first['status'],'received')
-   self.assertEqual(first['redirectUrl'],storefront.PUBLIC+'/#order='+first['id'])
+   self.assertEqual(first,second);self.assertEqual(first['status'],'awaiting_seller')
+   self.assertEqual(first['redirectUrl'],storefront.PUBLIC+'/#track='+first['customerToken'])
    self.assertEqual(len(server.flow.dashboard()['orders']),1);self.assertEqual(server.flow.dashboard()['ledger'],[])
-   with sqlite3.connect(storefront.DB) as db:self.assertEqual({r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")},{'checkouts'})
+   with storefront.connect() as db:self.assertEqual({r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")},{'checkouts'})
   finally:
    for http in [api,shop]:http.shutdown();http.server_close()
  def test_chat_turns_are_saved_individually_and_resume(self):
   r=server.flow.ingest(self.payload,deferred=True);oid=r['id']
+  server.flow.action(oid,'negotiate')
   for _ in range(2):server.flow.advance_pipeline(oid,force=True)
   def due_tick():
    with server.connect() as db:
@@ -71,7 +77,9 @@ class SplitFlowTests(unittest.TestCase):
    cfg=server.flow.configuration()['company'];cfg['priority']=priority;cfg['maxShipping']=25000
    server.flow.save_config(dict(id='company',config=cfg))
    payload=copy.deepcopy(self.payload);payload['orderId']='policy-'+priority
-   r=server.flow.ingest(payload);o=server.flow.order(r['id']);results[priority]=o
+   r=server.flow.ingest(payload);server.flow.action(r['id'],'negotiate')
+   for _ in range(6):server.flow.advance_pipeline(r['id'],force=True)
+   o=server.flow.order(r['id']);results[priority]=o
    for partner in o['agentConfig']:
     bids=[b for b in o['bids'] if b['partner']==partner['id']]
     if not bids:continue

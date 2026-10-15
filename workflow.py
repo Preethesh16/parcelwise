@@ -1,5 +1,5 @@
 """Local simulation: order ingestion, policy agents, and atomic escrow accounting.
-No carrier calls, LLM calls, blockchain transactions, or real money movement occur.
+Optional OpenAI proposals; no carrier, blockchain or real money movement.
 """
 import hashlib
 import hmac
@@ -7,6 +7,8 @@ import json
 import math
 import secrets
 import uuid
+import negotiation_ai
+import threading
 from datetime import datetime, timedelta, timezone
 
 PRODUCTS = [
@@ -14,7 +16,7 @@ PRODUCTS = [
     dict(id='bottle', name='Daybreak Bottle', category='DAILY ESSENTIALS', price=89900, weight=.6, length=28, width=10, height=10, color='peach', description='A little refresh for your routine.'),
     dict(id='lamp', name='Evening Light', category='A QUIETER HOME', price=149900, weight=1.8, length=30, width=25, height=25, color='lavender', description='Make a little room for warm light.')
 ]
-DEFAULT_COMPANY = dict(name='Everyday Store', address=dict(line1='18 Market Road, Andheri',city='Mumbai',postalCode='400058'), priority='balanced', maxShipping=25000, maxDays=5)
+DEFAULT_COMPANY = dict(name='Everyday Store', address=dict(line1='18 Market Road, Andheri',city='Mumbai',postalCode='400058'), priority='balanced', maxShipping=25000, maxDays=5, minReliability=90, fragile=False)
 DEFAULT_PARTNERS = [
     dict(id='A',name='Partner A',tag='Value delivery',enabled=True,deliveryDays=4,minPrice=6500,maxDiscount=15,maxWeight=25,excludedCities=[],wallet='partner:A'),
     dict(id='B',name='Partner B',tag='Express delivery',enabled=True,deliveryDays=2,minPrice=11000,maxDiscount=10,maxWeight=15,excludedCities=['Jaipur'],wallet='partner:B'),
@@ -38,6 +40,7 @@ def address(data,cities):
 class Workflow:
     def __init__(self, connect, quote_engine, cities):
         self.connect,self.quote_engine,self.cities=connect,quote_engine,cities
+        self.ai_lock=threading.Lock()
     def init(self):
         with self.connect() as db:
             db.executescript('''
@@ -56,6 +59,14 @@ class Workflow:
                 if 'deliveryDays' not in saved:
                     saved['deliveryDays']=p['deliveryDays']
                     db.execute('UPDATE settings SET data=? WHERE id=?',(canonical(saved),'partner:'+p['id']))
+            # Add capabilities without changing existing shipments or saved policies.
+            for row in db.execute('SELECT id,data FROM settings').fetchall():
+                saved=json.loads(row['data'])
+                if row['id']=='company':
+                    saved.setdefault('minReliability',90);saved.setdefault('fragile',False)
+                else:
+                    saved.setdefault('fragile',row['id']!='partner:A')
+                db.execute('UPDATE settings SET data=? WHERE id=?',(canonical(saved),row['id']))
     def configuration(self, db=None):
         if db is None:
             with self.connect() as db: return self.configuration(db)
@@ -80,11 +91,15 @@ class Workflow:
                 if not 2<=len(name)<=60: raise ValueError('Company name must contain 2–60 characters.')
                 if cfg.get('priority') not in ['balanced','price','speed','reliability']: raise ValueError('Choose a shipping priority.')
                 current.update(name=name,address=address(cfg.get('address'),self.cities),priority=cfg['priority'],maxShipping=integer(cfg.get('maxShipping'),100,100000,'Shipping budget'),maxDays=integer(cfg.get('maxDays'),1,14,'Delivery deadline'))
+                current['minReliability']=integer(cfg.get('minReliability',current.get('minReliability',90)),0,100,'Minimum reliability')
             else:
                 if type(cfg.get('enabled')) is not bool: raise ValueError('Choose whether this partner is available.')
                 excluded=cfg.get('excludedCities',[])
                 if not isinstance(excluded,list) or any(x not in self.cities for x in excluded): raise ValueError('Unsupported excluded city.')
                 current.update(enabled=cfg['enabled'],deliveryDays=integer(cfg.get('deliveryDays',current.get('deliveryDays',3)),1,14,'Promised transit days'),minPrice=integer(cfg.get('minPrice'),100,100000,'Minimum price'),maxDiscount=integer(cfg.get('maxDiscount'),0,40,'Maximum discount'),maxWeight=integer(cfg.get('maxWeight'),1,100,'Weight limit'),excludedCities=list(dict.fromkeys(excluded)))
+                if 'fragile' in cfg:
+                    if type(cfg['fragile']) is not bool: raise ValueError('Choose fragile-item capability.')
+                    current['fragile']=cfg['fragile']
             db.execute('UPDATE settings SET data=?,key_hash=? WHERE id=?',(canonical(current),digest(key) if key else old['key_hash'],identity))
         return dict(ok=True)
     def catalog(self):
@@ -101,6 +116,9 @@ class Workflow:
         if not isinstance(request_id,str) or not 8<=len(request_id)<=100: raise ValueError('A checkout request ID is required.')
         company=self.configuration()['company']
         payload=dict(orderId='SHOP-'+request_id,status='confirmed',seller=dict(name=company['name'],address=company['address']),customer=dict(name=name,address=destination),items=[dict(sku=product['id'],name=product['name'],quantity=quantity,unitPrice=product['price'],weightKg=product['weight'],dimensionsCm={k:product[k] for k in ['length','width','height']})])
+        fragile=data.get('fragile',False)
+        if type(fragile) is not bool: raise ValueError('Choose fragile-item handling.')
+        payload['requirements']=dict(maxDays=integer(data.get('maxDays',5),1,14,'Customer deadline'),fragile=fragile or product['id']=='lamp')
         result=self.ingest(payload)
         return dict(id=result['id'],customerToken=result['customerToken'],status=result['status'])
     def parse(self, payload):
@@ -126,7 +144,12 @@ class Workflow:
             weight+=w*quantity;length=max(length,l);width=max(width,b);height+=h*quantity;total+=price*quantity
             parsed.append(dict(name=title,quantity=quantity,unitPrice=price))
         if weight>100 or height>200: raise ValueError('Combined parcel exceeds demo limits: 100 kg or 200 cm height.')
-        return dict(externalId=external,sellerAddress=origin,customerAddress=destination,customerName=str(customer.get('name','Customer'))[:70],items=parsed,productTotal=total,origin=origin['city'],destination=destination['city'],weight=round(weight,3),length=length,width=width,height=height)
+        needs=payload.get('requirements',{})
+        if not isinstance(needs,dict): raise ValueError('Invalid delivery requirements.')
+        deadline=integer(needs.get('maxDays',14),1,14,'Customer deadline')
+        fragile=needs.get('fragile',False)
+        if type(fragile) is not bool: raise ValueError('Choose fragile-item handling.')
+        return dict(externalId=external,sellerName=str(seller.get('name','Store'))[:70],sellerAddress=origin,customerAddress=destination,customerName=str(customer.get('name','Customer'))[:70],items=parsed,productTotal=total,origin=origin['city'],destination=destination['city'],weight=round(weight,3),length=length,width=width,height=height,requirements=dict(maxDays=deadline,fragile=fragile))
     def ingest(self, payload, deferred=False):
         if not isinstance(payload,dict): raise ValueError('Order payload must be an object.')
         parsed=self.parse(payload); payload_hash=digest(canonical(payload))
@@ -139,10 +162,8 @@ class Workflow:
                 o=json.loads(existing['data']);return dict(id=o['id'],customerToken=existing['token'],status=o['status'],duplicate=True)
             oid='PW-'+uuid.uuid4().hex[:10].upper();token=secrets.token_urlsafe(24)
             o=dict(id=oid,**parsed,status='received',phase=0,stage=0,created=now(),events=[dict(actor='Order endpoint',text='Everyday confirmed the order. Delivery request received through the Parcelwise API.',kind='received',at=now())],bids=[],offers=[],excluded=[],contract=None,feedback=None,policy=cfg['company'],customerToken=token,agentConfig=cfg['partners'],quoteSnapshot=quote,nextAt=(datetime.now(timezone.utc)+timedelta(seconds=2)).isoformat())
+            o.update(status='awaiting_seller',phase=8,nextAt=None)
             db.execute('INSERT INTO orders VALUES(?,?,?,?,?,?)',(oid,parsed['externalId'],payload_hash,canonical(o),token,o['created']))
-        if not deferred:
-            for _ in range(8): self.advance_pipeline(oid,force=True)
-            o=self.order(oid)
         return dict(id=oid,customerToken=token,status=o['status'],duplicate=False)
 
     def order(self, oid):
@@ -152,6 +173,7 @@ class Workflow:
             o=json.loads(row['data'])
             o['transactions']=[dict(r) for r in db.execute('SELECT * FROM ledger WHERE order_id=? ORDER BY created',(oid,))]
         o['route']=dict(pickup=self.cities[o['origin']],destination=self.cities[o['destination']])
+        o['ai']=negotiation_ai.configuration()
         return o
 
     def tick(self):
@@ -160,14 +182,34 @@ class Workflow:
         for oid in ids: self.advance_pipeline(oid)
 
     def advance_pipeline(self, oid, force=False):
+        # No network request holds a SQLite transaction. Serialise live proposals,
+        # then compare the snapshot before committing a generated round.
+        with self.ai_lock:
+            return self._advance_pipeline(oid, force)
+
+    def _advance_pipeline(self, oid, force=False):
+        prepared=None; snapshot=None; failure=None
+        current=self.order(oid)
+        phase=current.get('phase',8)
+        if current.get('negotiationMode')=='openai' and phase in [2,3,4] and current.get('chatRound')!=phase-1 and (force or current['nextAt']<=now()):
+            with self.connect() as db:
+                snapshot=db.execute('SELECT data FROM orders WHERE id=?',(oid,)).fetchone()['data']
+            try: prepared=negotiation_ai.round_messages(json.loads(snapshot),phase-1)
+            except ValueError as exc: failure=str(exc)
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             row=db.execute('SELECT data FROM orders WHERE id=?',(oid,)).fetchone()
             if row is None: raise ValueError('Order not found.')
+            if snapshot is not None and row['data']!=snapshot: return
             o=json.loads(row['data']);phase=o.get('phase',8)
             if phase>=8 or (not force and o['nextAt']>now()): return
             company=o['policy']
             def event(actor,text,kind): o['events'].append(dict(actor=actor,text=text,kind=kind,at=now()))
+            if failure:
+                o.update(status='needs_attention',phase=8,nextAt=None,negotiationError=failure)
+                event('OpenAI negotiation',failure,'attention')
+                db.execute('UPDATE orders SET data=? WHERE id=?',(canonical(o),oid))
+                return
             if phase==0:
                 o['status']='parsed'
                 event('Dispatch agent',f"Parsed pickup in {o['origin']}, delivery in {o['destination']}, {o['weight']} kg, {o['length']:g} × {o['width']:g} × {o['height']:g} cm.",'parsed')
@@ -180,6 +222,8 @@ class Workflow:
                     if not p['enabled']: reason='Connection paused'
                     elif o['origin'] in p['excludedCities'] or o['destination'] in p['excludedCities']: reason='Route outside partner policy'
                     elif quote['billableWeight']>p['maxWeight']: reason='Parcel exceeds partner weight policy'
+                    elif company.get('fragile') and not p.get('fragile',p['id']!='A'): reason='Fragile-item handling unavailable'
+                    elif carrier and carrier['reliability']*100<company.get('minReliability',0): reason='Profile reliability below seller minimum'
                     elif not carrier: reason='Carrier does not serve this parcel or route'
                     if reason:
                         o['excluded'].append(dict(id=p['id'],name=p['name'],reason=reason));event(p['name']+' agent',reason,'declined');continue
@@ -187,6 +231,8 @@ class Workflow:
                     o['candidates'].append(dict(carrier,days=p['deliveryDays'],openingPrice=initial,pricePaise=floor,minPrice=p['minPrice'],maxDiscount=p['maxDiscount']))
             elif phase in [2,3,4]:
                 o['status']='bidding';round_number=phase-1
+                if prepared is not None:
+                    o.update(chatRound=round_number,chatCursor=0,chatQueue=prepared)
                 # Persist one conversational turn per worker tick, including its actual bid.
                 # Force mode drains one round for synchronous callers and deterministic tests.
                 if o.get('chatRound')!=round_number:
@@ -237,8 +283,8 @@ class Workflow:
                     o['status']='needs_attention';phase=7
                     event('Dispatch agent','No acceptable deal meets company and partner policies. No funds moved.','attention')
                 else:
-                    o['winner']=final[0];o['status']='deal_finalized'
-                    event('Company agent',f"Deal finalized with {final[0]['name']}: ₹{final[0]['pricePaise']/100:.2f}, {final[0]['days']} days. Best {company['priority']} match within policy.",'selected')
+                    o['recommended']=final[0]['id'];o['status']='awaiting_selection';phase=7
+                    event('Company agent',f"Recommended {final[0]['name']}: ₹{final[0]['pricePaise']/100:.2f}, {final[0]['days']} days. Waiting for the seller to choose a partner. No funds moved.",'recommended')
             elif phase==6:
                 winner=o['winner'];terms=dict(orderId=oid,company='company',partner='partner:'+winner['id'],amount=winner['pricePaise'],currency='INR_DEMO',deliveryDays=winner['days'],releaseRule='Customer confirms receipt after partner delivery report',disputeRule='Hold escrow; demo company may refund',expiresAt=(datetime.now(timezone.utc)+timedelta(days=winner['days']+2)).isoformat())
                 o['contract']=dict(id='SIM-'+uuid.uuid4().hex[:12].upper(),terms=terms,termsHash=digest(canonical(terms)),state='created',mode='simulation',createdAt=now());o['status']='contract_created'
@@ -273,7 +319,7 @@ class Workflow:
             orders=[json.loads(r['data']) for r in db.execute('SELECT data FROM orders ORDER BY created DESC')]
             wallets={r['id']:r['balance'] for r in db.execute('SELECT * FROM wallets')}
             ledger=[dict(r) for r in db.execute('SELECT * FROM ledger ORDER BY created DESC')]
-        return dict(orders=orders,wallets=wallets,ledger=ledger,config=self.configuration(),mode='simulation')
+        return dict(orders=orders,wallets=wallets,ledger=ledger,config=self.configuration(),mode='simulation',ai=negotiation_ai.configuration())
     def tracking(self, token):
         with self.connect() as db: row=db.execute('SELECT data FROM orders WHERE token=?',(token,)).fetchone()
         if row is None: raise ValueError('Delivery link not found.')
@@ -281,6 +327,11 @@ class Workflow:
         return {k:o.get(k) for k in ['id','items','origin','destination','stage','status','winner','feedback']}
     def action(self,oid,action, data=None, token=None, partner=None):
         data=data or {}
+        # Refresh estimates outside the write transaction; quotes read historical feedback.
+        refreshed=None
+        if action=='negotiate':
+            current=self.order(oid)
+            refreshed=(self.configuration(),self.quote_engine(dict(current,priority=data.get('priority',current['policy']['priority']))))
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             row=db.execute('SELECT * FROM orders WHERE id=?',(oid,)).fetchone()
@@ -288,7 +339,35 @@ class Workflow:
             o=json.loads(row['data']);contract=o.get('contract')
             if action in ['confirm','dispute','feedback'] and (not token or not hmac.compare_digest(token,row['token'])): raise PermissionError('A valid customer delivery link is required.')
             def event(actor,text,kind):o['events'].append(dict(actor=actor,text=text,kind=kind,at=now()))
-            if action=='advance':
+            if action=='negotiate':
+                if o.get('winner') or contract: raise ValueError('A selected delivery cannot be renegotiated.')
+                if o['status'] not in ['awaiting_seller','awaiting_selection','needs_attention']: raise ValueError('Negotiation is already running.')
+                cfg,quote=refreshed
+                ai=negotiation_ai.configuration()
+                if ai['mode']=='openai' and not ai['configured']: raise ValueError('Configure OPENAI_API_KEY on the server before live negotiation.')
+                policy=dict(cfg['company'])
+                policy.update(maxShipping=integer(data.get('maxShipping',policy['maxShipping']),100,100000,'Shipping budget'),maxDays=integer(data.get('maxDays',policy['maxDays']),1,14,'Seller deadline'),minReliability=integer(data.get('minReliability',policy.get('minReliability',90)),0,100,'Minimum reliability'),priority=data.get('priority',policy['priority']))
+                if policy['priority'] not in ['balanced','price','speed','reliability']: raise ValueError('Choose a priority.')
+                fragile=data.get('fragile',False)
+                if type(fragile) is not bool: raise ValueError('Choose fragile-item handling.')
+                needs=o.get('requirements',{})
+                policy['maxDays']=min(policy['maxDays'],needs.get('maxDays',14))
+                policy['fragile']=fragile or needs.get('fragile',False)
+                o.update(policy=policy,agentConfig=cfg['partners'],quoteSnapshot=quote,status='received',phase=0,nextAt=now(),bids=[],offers=[],excluded=[])
+                o['negotiationMode']=ai['mode'];o.pop('negotiationError',None)
+                for field in ['candidates','chatRound','chatCursor','chatQueue','recommended']: o.pop(field,None)
+                event('Seller','Requested partner negotiation using the order constraints.','negotiation_requested')
+            elif action=='select':
+                chosen=data.get('partnerId')
+                if o.get('winner'):
+                    if o['winner']['id']==chosen:return dict(ok=True,duplicate=True)
+                    raise ValueError('A delivery partner has already been selected.')
+                if o['status']!='awaiting_selection': raise ValueError('Wait for negotiation recommendations before choosing.')
+                winner=next((p for p in o['offers'] if p['id']==chosen),None)
+                if winner is None: raise ValueError('Choose an eligible negotiated offer.')
+                o.update(winner=winner,status='deal_finalized',phase=6,nextAt=now(),selectedAt=now())
+                event('Seller',f"Selected {winner['name']} at ₹{winner['pricePaise']/100:.2f} with a {winner['days']}-day promise.",'selected')
+            elif action=='advance':
                 if partner and o.get('winner',{}).get('id')!=partner: raise PermissionError('This partner was not selected for the delivery.')
                 if not contract or contract['state']!='funded': raise ValueError('Only a funded delivery can move forward.')
                 target=data.get('stage',o['stage']+1)
@@ -320,7 +399,9 @@ class Workflow:
                 if o['feedback']:raise ValueError('Feedback has already been submitted.')
                 rating=integer(data.get('rating'),1,5,'Rating')
                 if type(data.get('ontime')) is not bool or type(data.get('success')) is not bool:raise ValueError('Choose delivery outcomes.')
-                feedback=dict(rating=rating,quality=(rating-1)/4,ontime=int(data['ontime']),success=int(data['success']))
+                comment=str(data.get('comment','')).strip()
+                if len(comment)>500: raise ValueError('Keep feedback within 500 characters.')
+                feedback=dict(rating=rating,quality=(rating-1)/4,ontime=int(data['ontime']),success=int(data['success']),comment=comment,created=now())
                 o['feedback']=feedback;db.execute('UPDATE shipments SET feedback=? WHERE id=?',(canonical(feedback),oid));event('Customer','Delivery feedback saved to improve future route recommendations.','feedback')
             else: raise ValueError('Unknown action.')
             db.execute('UPDATE orders SET data=? WHERE id=?',(canonical(o),oid))
