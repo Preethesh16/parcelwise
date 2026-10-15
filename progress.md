@@ -81,3 +81,10 @@ All implementation items listed earlier are now delivered. Earlier pending entri
 - Local runtime: Everyday http://localhost:8010/shop; seller http://localhost:8001/#login=seller; courier http://localhost:8001/#login=partner. Port 8000 remains owned by an unrelated app.
 - OpenAI credentials stay in a private mode-0600 runtime file outside Git. Blockchain, payment and delivery positions remain simulated; real OpenAI negotiations are enabled locally.
 - README includes all six account credentials and restart commands. No production deployment or real courier integration is claimed.
+
+## Published verification
+- Implementation pushed to origin/main as cb303d6.
+- A delayed viewport change subsequently applied: final analytics was verified at 390 × 844 with no document overflow; mobile trend and rating graphics inspected. Browser override reset. This supersedes the earlier phone-width limitation.
+- Final running API/store endpoints both return HTTP 200. Credential scan passed; working tree was clean after implementation commit.
+- Screenshot saved outside Git at ../../work/analytics-final.png. Combined Shiprocket + sample-history filters verified at 150 records on the final build.
+- Goal requirements are complete for the local simulation; live provider timing depends on OpenAI response latency.
