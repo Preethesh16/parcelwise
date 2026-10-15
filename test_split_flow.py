@@ -9,7 +9,9 @@ class SplitFlowTests(unittest.TestCase):
  def setUp(self):
   self.temp=tempfile.TemporaryDirectory();self.old_db=server.DB;self.old_store=storefront.DB
   server.DB=Path(self.temp.name)/'parcel.sqlite3';storefront.DB=Path(self.temp.name)/'store.sqlite3'
-  server.init();server.flow.init();storefront.init()
+  server.init();server.flow.init()
+  with server.connect() as db: db.execute("UPDATE settings SET data=json_set(data,'$.autoDispatch',json('false')) WHERE id='company'")
+  storefront.init()
   self.payload=json.loads(Path('static/api-example.json').read_text())
  def tearDown(self):server.DB=self.old_db;storefront.DB=self.old_store;self.temp.cleanup()
  def test_each_phase_is_persisted_before_funding(self):
@@ -19,7 +21,7 @@ class SplitFlowTests(unittest.TestCase):
   for expected in ['parsed','broadcasting','bidding','bidding','bidding','awaiting_selection']:
    server.flow.advance_pipeline(oid,force=True);o=server.flow.order(oid)
    self.assertEqual(o['status'],expected);self.assertEqual(o['transactions'],[])
-  self.assertEqual(len(o['bids']),9);self.assertIsNone(o['contract'])
+  self.assertEqual(len(o['bids']),15);self.assertIsNone(o['contract'])
   server.flow.action(oid,'select',dict(partnerId=o['offers'][0]['id']))
   server.flow.advance_pipeline(oid,force=True)
   self.assertEqual(server.flow.order(oid)['contract']['state'],'created')
@@ -69,7 +71,7 @@ class SplitFlowTests(unittest.TestCase):
   server.flow.init();due_tick();o=server.flow.order(oid)
   self.assertEqual(len(o['bids']),1);self.assertEqual(o['chatCursor'],2)
   self.assertIn('My policy:',o['events'][-1]['text']);self.assertEqual(o['transactions'],[])
-  for _ in range(2):due_tick()
+  for _ in range(4):due_tick()
   self.assertEqual(server.flow.order(oid)['phase'],3)
  def test_company_policy_changes_counters_and_partner_respects_floor(self):
   results={}

@@ -42,6 +42,7 @@ class OpenAITests(unittest.TestCase):
             original=server.DB
             try:
                 server.DB=Path(directory)/'test.db';server.init();server.flow.init()
+                with server.connect() as db: db.execute("UPDATE settings SET data=json_set(data,'$.autoDispatch',json('false')) WHERE id='company'")
                 flow=server.flow
                 oid=flow.ingest(json.loads(Path('static/api-example.json').read_text()))['id']
                 flow.action(oid, 'negotiate')
@@ -71,3 +72,25 @@ class OpenAITests(unittest.TestCase):
 
 
 if __name__=='__main__': unittest.main()
+
+class ProposalRecoveryTests(unittest.TestCase):
+    def test_completed_proposals_are_reused_after_partial_failure(self):
+        order=dict(id='cache-test',origin='Mumbai',destination='Pune',weight=1,
+            policy=dict(maxShipping=25000,maxDays=5,priority='balanced'),
+            bids=[],candidates=[dict(id='A',name='Blue Dart',openingPrice=10000,pricePaise=8000,days=4)])
+        saved={}
+        calls=[]
+        def propose(role,context,low,high):
+            calls.append(role)
+            if role.startswith('delivery'):raise ValueError('Provider unavailable')
+            return dict(price=9000,explanation='Within budget.')
+        with patch.object(ai,'propose',side_effect=propose):
+            with self.assertRaises(ValueError):ai.round_messages(order,1,saved.get,lambda k,v:saved.update({k:v}))
+        self.assertEqual(len(saved),1)
+        with patch.object(ai,'propose',return_value=dict(price=9000,explanation='Accepted.')) as call:
+            result=ai.round_messages(order,1,saved.get,lambda k,v:saved.update({k:v}))
+            self.assertEqual(call.call_count,1)
+            self.assertEqual(result[1]['bid']['price'],9000)
+        with patch.object(ai,'propose') as call:
+            ai.round_messages(order,1,saved.get,lambda k,v:saved.update({k:v}))
+            call.assert_not_called()

@@ -9,6 +9,7 @@ class SellerDecisionTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.old=server.DB
         server.DB=Path(self.tmp.name)/'test.sqlite3'
         server.init();server.flow.init()
+        with server.connect() as db: db.execute("UPDATE settings SET data=json_set(data,'$.autoDispatch',json('false')) WHERE id='company'")
         self.f=server.flow
         self.payload=json.loads(Path('static/api-example.json').read_text())
     def tearDown(self):
@@ -45,7 +46,7 @@ class SellerDecisionTests(unittest.TestCase):
         self.payload['requirements']=dict(maxDays=2,fragile=True)
         oid=self.create();o=self.negotiate(oid,maxDays=14,fragile=False)
         self.assertEqual(o['policy']['maxDays'],2);self.assertTrue(o['policy']['fragile'])
-        self.assertEqual([p['id'] for p in o['offers']],['B'])
+        self.assertEqual([p['id'] for p in o['offers']],['B','E'])
         with self.assertRaises(ValueError):self.f.action(oid,'select',dict(partnerId='A'))
     def test_no_match_and_renegotiation(self):
         oid=self.create();o=self.negotiate(oid,maxShipping=100)
@@ -55,7 +56,7 @@ class SellerDecisionTests(unittest.TestCase):
         self.assertEqual(o['status'],'needs_attention')
         o=self.negotiate(oid,maxShipping=25000,minReliability=90)
         self.assertEqual(o['status'],'awaiting_selection')
-        self.assertEqual(len(o['bids']),9)
+        self.assertEqual(len(o['bids']),15)
     def test_feedback_changes_next_negotiation_profile(self):
         oid=self.create();o=self.negotiate(oid)
         chosen=o['offers'][0]

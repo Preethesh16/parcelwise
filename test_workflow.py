@@ -12,7 +12,9 @@ import server
 class WorkflowTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();server.DB=Path(self.tmp.name)/'flow.sqlite3'
-        server.init();server.flow.init();self.flow=server.flow
+        server.init();server.flow.init()
+        with server.connect() as db: db.execute("UPDATE settings SET data=json_set(data,'$.autoDispatch',json('false')) WHERE id='company'")
+        self.flow=server.flow
     def tearDown(self): self.tmp.cleanup()
     def checkout(self,request='test-order-001'):
         r=self.flow.checkout(dict(productId='bag',quantity=1,customerName='Demo Customer',address=dict(line1='24 Lake Road',city='Bengaluru',postalCode='560001'),requestId=request))
@@ -32,7 +34,7 @@ class WorkflowTests(unittest.TestCase):
     def test_checkout_to_payout_and_feedback(self):
         r=self.checkout();o=self.order(r);amount=o['contract']['terms']['amount'];wallet=self.flow.dashboard()['wallets']
         self.assertEqual(wallet['company'],1000000-amount);self.assertEqual(wallet['escrow'],amount)
-        self.assertEqual(len(o['bids']),9);self.assertEqual(o['stage'],0)
+        self.assertEqual(len(o['bids']),15);self.assertEqual(o['stage'],0)
         with self.assertRaises(ValueError):self.flow.action(r['id'],'confirm',token=r['customerToken'])
         self.delivered(r);self.assertEqual(self.flow.dashboard()['wallets']['escrow'],amount)
         self.flow.action(r['id'],'confirm',token=r['customerToken'])

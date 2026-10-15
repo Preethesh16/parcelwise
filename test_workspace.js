@@ -9,8 +9,9 @@ const context=vm.createContext({
  console,location:{hash:'#order=PW-UI'},document:{activeElement:null,querySelector:s=>elements[s]||null,addEventListener:(name,fn)=>(listeners[name]??=[]).push(fn)},
  window:{addEventListener:()=>{}},setTimeout:()=>1,clearTimeout:()=>{},setInterval:()=>1,clearInterval:()=>{},
  fetch:async(url,opts)=>{requests.push({url,body:opts?.body&&JSON.parse(opts.body)});return {ok:true,json:async()=>url.includes('order-action')?{ok:true}:fixture};},
- fixture,offer,
+ fixture,offer,portalAccount:'company',portalIdentity:()=> 'company',portalNav:()=>{},
 });
+vm.runInContext(fs.readFileSync('static/journey-view.js','utf8'),context);
 vm.runInContext(fs.readFileSync('static/workspace.js','utf8').replace(/\nroute\(\);\s*$/,''),context);
 vm.runInContext('renderOrder(fixture)',context);
 assert.match(elements['#workspace'].innerHTML,/Find suitable partners/);
@@ -52,3 +53,15 @@ assert.match(elements['#workspace'].innerHTML,/Can you deliver for ₹150/);
  assert.match(elements['#workspace'].innerHTML,/Good delivery/);
  console.log('UI approval, customer constraints, selection action and feedback states passed.');
 })().catch(e=>{console.error(e);process.exitCode=1;});
+
+// Automatic customer scenes must expose the winner and funded escrow before tracking.
+for (const [fields, expected] of [
+ [{status:'received',stage:0},'broadcast'],
+ [{status:'bidding',stage:0},'negotiation'],
+ [{status:'deal_finalized',stage:0,winner:offer},'winner'],
+ [{status:'booked',stage:0,winner:offer,contract:{state:'funded'}},'contract'],
+ [{status:'picked_up',stage:1,winner:offer,contract:{state:'funded'}},'delivery'],
+]) {
+ context.stageFixture=fields;
+ assert.equal(vm.runInContext('customerStage(stageFixture)',context),expected);
+}

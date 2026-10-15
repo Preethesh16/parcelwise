@@ -16,11 +16,13 @@ PRODUCTS = [
     dict(id='bottle', name='Daybreak Bottle', category='DAILY ESSENTIALS', price=89900, weight=.6, length=28, width=10, height=10, color='peach', description='A little refresh for your routine.'),
     dict(id='lamp', name='Evening Light', category='A QUIETER HOME', price=149900, weight=1.8, length=30, width=25, height=25, color='lavender', description='Make a little room for warm light.')
 ]
-DEFAULT_COMPANY = dict(name='Everyday Store', address=dict(line1='18 Market Road, Andheri',city='Mumbai',postalCode='400058'), priority='balanced', maxShipping=25000, maxDays=5, minReliability=90, fragile=False)
+DEFAULT_COMPANY = dict(name='Everyday Store', address=dict(line1='18 Market Road, Andheri',city='Mumbai',postalCode='400058'), priority='balanced', maxShipping=25000, maxDays=5, minReliability=90, fragile=False, autoDispatch=True)
 DEFAULT_PARTNERS = [
-    dict(id='A',name='Partner A',tag='Value delivery',enabled=True,deliveryDays=4,minPrice=6500,maxDiscount=15,maxWeight=25,excludedCities=[],wallet='partner:A'),
-    dict(id='B',name='Partner B',tag='Express delivery',enabled=True,deliveryDays=2,minPrice=11000,maxDiscount=10,maxWeight=15,excludedCities=['Jaipur'],wallet='partner:B'),
-    dict(id='C',name='Partner C',tag='Care-first delivery',enabled=True,deliveryDays=3,minPrice=9000,maxDiscount=12,maxWeight=30,excludedCities=['Kolkata'],wallet='partner:C')
+    dict(id='A',name='Blue Dart',tag='Value delivery',enabled=True,deliveryDays=4,minPrice=6500,maxDiscount=15,maxWeight=25,excludedCities=[],wallet='partner:A'),
+    dict(id='B',name='Delhivery',tag='Express delivery',enabled=True,deliveryDays=2,minPrice=11000,maxDiscount=10,maxWeight=15,excludedCities=['Jaipur'],wallet='partner:B'),
+    dict(id='C',name='Shiprocket',tag='Care-first delivery',enabled=True,deliveryDays=3,minPrice=9000,maxDiscount=12,maxWeight=30,excludedCities=['Kolkata'],wallet='partner:C'),
+    dict(id='D',name='Ekart Logistics',tag='Everyday essentials',enabled=True,deliveryDays=4,minPrice=7000,maxDiscount=18,maxWeight=25,excludedCities=[],wallet='partner:D'),
+    dict(id='E',name='FedEx',tag='Priority parcels',enabled=True,deliveryDays=2,minPrice=13000,maxDiscount=8,maxWeight=30,excludedCities=[],wallet='partner:E')
 ]
 
 def now(): return datetime.now(timezone.utc).isoformat()
@@ -44,6 +46,7 @@ class Workflow:
     def init(self):
         with self.connect() as db:
             db.executescript('''
+            CREATE TABLE IF NOT EXISTS ai_proposals (key TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS settings (id TEXT PRIMARY KEY, data TEXT NOT NULL, key_hash TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY, external_id TEXT UNIQUE NOT NULL, payload_hash TEXT NOT NULL, data TEXT NOT NULL, token TEXT UNIQUE NOT NULL, created TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS wallets (id TEXT PRIMARY KEY, balance INTEGER NOT NULL CHECK(balance>=0));
@@ -63,9 +66,11 @@ class Workflow:
             for row in db.execute('SELECT id,data FROM settings').fetchall():
                 saved=json.loads(row['data'])
                 if row['id']=='company':
-                    saved.setdefault('minReliability',90);saved.setdefault('fragile',False)
+                    saved.setdefault('minReliability',90);saved.setdefault('fragile',False);saved.setdefault('autoDispatch',True)
                 else:
                     saved.setdefault('fragile',row['id']!='partner:A')
+                    profile=next((p for p in DEFAULT_PARTNERS if row['id']=='partner:'+p['id']),None)
+                    if profile and saved.get('name','').startswith('Partner '): saved['name']=profile['name']
                 db.execute('UPDATE settings SET data=? WHERE id=?',(canonical(saved),row['id']))
     def configuration(self, db=None):
         if db is None:
@@ -92,6 +97,9 @@ class Workflow:
                 if cfg.get('priority') not in ['balanced','price','speed','reliability']: raise ValueError('Choose a shipping priority.')
                 current.update(name=name,address=address(cfg.get('address'),self.cities),priority=cfg['priority'],maxShipping=integer(cfg.get('maxShipping'),100,100000,'Shipping budget'),maxDays=integer(cfg.get('maxDays'),1,14,'Delivery deadline'))
                 current['minReliability']=integer(cfg.get('minReliability',current.get('minReliability',90)),0,100,'Minimum reliability')
+                if 'fragile' in cfg:
+                    if type(cfg['fragile']) is not bool:raise ValueError('Choose fragile handling.')
+                    current['fragile']=cfg['fragile']
             else:
                 if type(cfg.get('enabled')) is not bool: raise ValueError('Choose whether this partner is available.')
                 excluded=cfg.get('excludedCities',[])
@@ -162,7 +170,11 @@ class Workflow:
                 o=json.loads(existing['data']);return dict(id=o['id'],customerToken=existing['token'],status=o['status'],duplicate=True)
             oid='PW-'+uuid.uuid4().hex[:10].upper();token=secrets.token_urlsafe(24)
             o=dict(id=oid,**parsed,status='received',phase=0,stage=0,created=now(),events=[dict(actor='Order endpoint',text='Everyday confirmed the order. Delivery request received through the Parcelwise API.',kind='received',at=now())],bids=[],offers=[],excluded=[],contract=None,feedback=None,policy=cfg['company'],customerToken=token,agentConfig=cfg['partners'],quoteSnapshot=quote,nextAt=(datetime.now(timezone.utc)+timedelta(seconds=2)).isoformat())
-            o.update(status='awaiting_seller',phase=8,nextAt=None)
+            o['automatic']=cfg['company'].get('autoDispatch',True)
+            o['source']='checkout'
+            o['policy']=dict(cfg['company'],maxDays=min(cfg['company']['maxDays'],parsed['requirements']['maxDays']),fragile=cfg['company'].get('fragile',False) or parsed['requirements']['fragile'])
+            o['negotiationMode']=negotiation_ai.configuration()['mode']
+            if not o['automatic']: o.update(status='awaiting_seller',phase=8,nextAt=None)
             db.execute('INSERT INTO orders VALUES(?,?,?,?,?,?)',(oid,parsed['externalId'],payload_hash,canonical(o),token,o['created']))
         return dict(id=oid,customerToken=token,status=o['status'],duplicate=False)
 
@@ -180,6 +192,10 @@ class Workflow:
         with self.connect() as db:
             ids=[r['id'] for r in db.execute("SELECT id FROM orders WHERE json_extract(data,'$.phase') < 8 AND json_extract(data,'$.nextAt') <= ?",(now(),))]
         for oid in ids: self.advance_pipeline(oid)
+        with self.connect() as db:
+            deliveries=[json.loads(r['data']) for r in db.execute("SELECT data FROM orders WHERE json_extract(data,'$.automatic')=1 AND json_extract(data,'$.contract.state')='funded' AND json_extract(data,'$.stage')<4 AND json_extract(data,'$.nextDeliveryAt')<=?",(now(),))]
+        for o in deliveries:
+            self.action(o['id'],'advance',dict(stage=o['stage']+1),partner=o['winner']['id'])
 
     def advance_pipeline(self, oid, force=False):
         # No network request holds a SQLite transaction. Serialise live proposals,
@@ -194,7 +210,13 @@ class Workflow:
         if current.get('negotiationMode')=='openai' and phase in [2,3,4] and current.get('chatRound')!=phase-1 and (force or current['nextAt']<=now()):
             with self.connect() as db:
                 snapshot=db.execute('SELECT data FROM orders WHERE id=?',(oid,)).fetchone()['data']
-            try: prepared=negotiation_ai.round_messages(json.loads(snapshot),phase-1)
+            def cached(key):
+                with self.connect() as db:
+                    found=db.execute('SELECT data FROM ai_proposals WHERE key=?',(key,)).fetchone()
+                return json.loads(found['data']) if found else None
+            def save(key,proposal):
+                with self.connect() as db:db.execute('INSERT OR IGNORE INTO ai_proposals VALUES(?,?)',(key,canonical(proposal)))
+            try: prepared=negotiation_ai.round_messages(json.loads(snapshot),phase-1,cached=cached,save=save)
             except ValueError as exc: failure=str(exc)
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -283,8 +305,13 @@ class Workflow:
                     o['status']='needs_attention';phase=7
                     event('Dispatch agent','No acceptable deal meets company and partner policies. No funds moved.','attention')
                 else:
-                    o['recommended']=final[0]['id'];o['status']='awaiting_selection';phase=7
-                    event('Company agent',f"Recommended {final[0]['name']}: ₹{final[0]['pricePaise']/100:.2f}, {final[0]['days']} days. Waiting for the seller to choose a partner. No funds moved.",'recommended')
+                    o['recommended']=final[0]['id']
+                    if o.get('automatic'):
+                        o.update(winner=dict(final[0]),status='deal_finalized',selectedAt=now())
+                        event('Company agent',f"Selected {final[0]['name']}: ₹{final[0]['pricePaise']/100:.2f}, {final[0]['days']} days. Best {company['priority']} match within the saved rules.",'selected')
+                    else:
+                        o['status']='awaiting_selection';phase=7
+                        event('Company agent',f"Recommended {final[0]['name']}: ₹{final[0]['pricePaise']/100:.2f}, {final[0]['days']} days. Waiting for the seller to choose a partner. No funds moved.",'recommended')
             elif phase==6:
                 winner=o['winner'];terms=dict(orderId=oid,company='company',partner='partner:'+winner['id'],amount=winner['pricePaise'],currency='INR_DEMO',deliveryDays=winner['days'],releaseRule='Customer confirms receipt after partner delivery report',disputeRule='Hold escrow; demo company may refund',expiresAt=(datetime.now(timezone.utc)+timedelta(days=winner['days']+2)).isoformat())
                 o['contract']=dict(id='SIM-'+uuid.uuid4().hex[:12].upper(),terms=terms,termsHash=digest(canonical(terms)),state='created',mode='simulation',createdAt=now());o['status']='contract_created'
@@ -294,10 +321,15 @@ class Workflow:
                 if db.execute("SELECT balance FROM wallets WHERE id='company'").fetchone()['balance']<amount:
                     o['status']='needs_funding';event('Company wallet','Insufficient demo credits. Contract remains unfunded.','attention')
                 else:
-                    self.transfer(db,oid,'fund','company','escrow',amount);o['contract']['state']='funded';o['status']='booked';self.create_shipment(db,o)
+                    self.transfer(db,oid,'fund','company','escrow',amount);o['contract']['state']='funded';o['status']='booked';self.create_shipment(db,o);self.schedule_delivery(o)
                     event('Company wallet',f"Transferred ₹{amount/100:.2f} into simulated escrow. Ready for pickup; payout waits for customer confirmation.",'funded')
-            o['phase']=phase+1;o['nextAt']=(datetime.now(timezone.utc)+timedelta(seconds=2.4 if o['status']=='bidding' else 7 if o['status']=='deal_finalized' else 4)).isoformat()
+            o['phase']=phase+1;o['nextAt']=(datetime.now(timezone.utc)+timedelta(seconds=1.4 if o['status']=='bidding' else 7 if o['status']=='deal_finalized' else 4)).isoformat()
             db.execute('UPDATE orders SET data=? WHERE id=?',(canonical(o),oid))
+    @staticmethod
+    def schedule_delivery(o):
+        o.setdefault('dispatchedAt',now())
+        o.setdefault('promisedAt',(datetime.fromisoformat(o['dispatchedAt'])+timedelta(days=o['winner']['days'])).isoformat())
+        o['nextDeliveryAt']=(datetime.now(timezone.utc)+timedelta(seconds=5)).isoformat()
     @staticmethod
     def score(price,p,priority):
         weights={'balanced':[.35,.25,.25,.15],'price':[.8,.1,.05,.05],'speed':[.15,.65,.1,.1],'reliability':[.1,.1,.55,.25]}[priority]
@@ -324,7 +356,10 @@ class Workflow:
         with self.connect() as db: row=db.execute('SELECT data FROM orders WHERE token=?',(token,)).fetchone()
         if row is None: raise ValueError('Delivery link not found.')
         o=json.loads(row['data'])
-        return {k:o.get(k) for k in ['id','items','origin','destination','stage','status','winner','feedback']}
+        public={k:o.get(k) for k in ['id','items','origin','destination','stage','status','winner','feedback','events','bids','offers','contract','policy','negotiationMode','automatic','actualDeliveryDays','delayDays']}
+        public['partners']=[dict(id=p['id'],name=p['name'],enabled=p['enabled']) for p in o.get('agentConfig',[])]
+        public['route']=dict(pickup=self.cities[o['origin']],destination=self.cities[o['destination']])
+        return public
     def action(self,oid,action, data=None, token=None, partner=None):
         data=data or {}
         # Refresh estimates outside the write transaction; quotes read historical feedback.
@@ -374,6 +409,13 @@ class Workflow:
                 integer(target,1,4,'Tracking stage')
                 if target<=o['stage']: return dict(ok=True,duplicate=True)
                 if target!=o['stage']+1: raise ValueError('Delivery stages must arrive in sequence.')
+                o['nextDeliveryAt']=(datetime.now(timezone.utc)+timedelta(seconds=4)).isoformat()
+                if target==4:
+                    o['deliveredAt']=now()
+                    # Accelerated demo clock represents the contracted number of transit days.
+                    o['actualDeliveryDays']=o['winner']['days']
+                    o['simulatedDeliveredAt']=o.get('promisedAt')
+                    o['delayDays']=0
                 o['stage']=target;o['status']=['booked','picked_up','in_transit','out_for_delivery','awaiting_confirmation'][target]
                 db.execute('UPDATE shipments SET stage=? WHERE id=?',(target,oid))
                 event(o['winner']['name'],['','Parcel picked up.','Parcel in transit.','Parcel out for delivery.','Partner reports delivery. Escrow stays locked until customer confirmation.'][target],'tracking')
@@ -393,7 +435,7 @@ class Workflow:
                 contract['state']='refunded';o['status']='refunded';event('Escrow simulator','Held amount returned to the company wallet. No partner payout.','refunded')
             elif action=='fund':
                 if not contract or o['status']!='needs_funding':raise ValueError('This deal is not awaiting funding.')
-                self.transfer(db,oid,'fund','company','escrow',contract['terms']['amount']);contract['state']='funded';o['status']='booked';self.create_shipment(db,o);event('Company wallet','Simulated escrow funded. Delivery booked.','funded')
+                self.transfer(db,oid,'fund','company','escrow',contract['terms']['amount']);contract['state']='funded';o['status']='booked';self.create_shipment(db,o);self.schedule_delivery(o);event('Company wallet','Simulated escrow funded. Delivery booked.','funded')
             elif action=='feedback':
                 if o['stage']!=4:raise ValueError('Feedback opens after delivery is reported.')
                 if o['feedback']:raise ValueError('Feedback has already been submitted.')

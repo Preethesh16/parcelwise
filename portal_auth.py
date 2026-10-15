@@ -12,7 +12,9 @@ def token(headers):
     cookie = SimpleCookie()
     try: cookie.load(headers.get('Cookie', ''))
     except Exception: return ''
-    return cookie['pw_session'].value if 'pw_session' in cookie else ''
+    account=headers.get('X-Portal-Account','')
+    name='pw_'+account.replace(':','_') if account=='company' or account in ['partner:'+x for x in 'ABCDE'] else 'pw_session'
+    return cookie[name].value if name in cookie else ''
 
 
 def identity(headers):
@@ -27,11 +29,12 @@ def create(account, headers):
     with lock:
         for key in list(sessions):
             if sessions[key]['expires'] <= time.time(): del sessions[key]
-        sessions.pop(token(headers), None)
         sessions[value] = dict(account=account, expires=time.time()+28800)
-    return 'pw_session='+value+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800'
+    return [name+'='+value+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800' for name in ['pw_session','pw_'+account.replace(':','_')]]
 
 
 def logout(headers):
+    account=identity(headers)
     with lock: sessions.pop(token(headers), None)
-    return 'pw_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'
+    names=['pw_session']+(['pw_'+account.replace(':','_')] if account else [])
+    return [name+'=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' for name in names]
