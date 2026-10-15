@@ -47,6 +47,9 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path in ('/','/index.html'):
             self.path='/landing.html'
             return super().do_GET()
+        if self.path in ('/shop','/shop/'):
+            self.path='/index.html'
+            return super().do_GET()
         if self.path=='/api/catalog':return self.respond(dict(products=PRODUCTS,cities=CITIES))
         if self.path=='/api/config':return self.respond(dict(parcelwiseUrl=PUBLIC))
         return super().do_GET()

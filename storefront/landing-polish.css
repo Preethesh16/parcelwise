@@ -1,0 +1,6 @@
+/* Keep the network statement as one balanced, centered unit. */
+.network-card h2{text-align:center}
+.network-card h2 span{text-align:center}
+.logo{display:inline-flex;align-items:center;gap:5px;color:#fff;font-family:'DM Sans',Arial,sans-serif;font-size:0;letter-spacing:0}
+.logo .wordmark{display:inline;color:#fff;font-size:26px;font-weight:800;letter-spacing:-1.65px;line-height:1}
+.logo .spark{display:inline;color:#b9ca73;font-family:Arial,sans-serif;font-size:28px;font-weight:400;line-height:1;transform:translateY(-1px)}
