@@ -55,7 +55,11 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self,*args,**kwargs):super().__init__(*args,directory=str(ROOT/'storefront'),**kwargs)
     def respond(self,data,status=200):
         body=json.dumps(data).encode();self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Cache-Control','no-store');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+    def end_headers(self):
+        self.send_header('Cache-Control','no-store, max-age=0')
+        super().end_headers()
     def do_GET(self):
+        if 'If-Modified-Since' in self.headers: del self.headers['If-Modified-Since']
         if self.path=='/shop/':
             self.send_response(302);self.send_header('Location','/shop');self.end_headers();return
         if self.path in ('/','/index.html'):
