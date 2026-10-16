@@ -1,0 +1,15 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const data=JSON.parse(fs.readFileSync('static/data/synthetic_orders.json','utf8'));
+const elements={};const context={window:{},document:{addEventListener(){},querySelector:s=>elements[s]??=( {innerHTML:'',textContent:''})},fetch:async()=>({ok:true,json:async()=>data}),orderTable:()=>'',Date,console};
+vm.createContext(context);vm.runInContext(fs.readFileSync('static/analytics.js','utf8'),context);
+(async()=>{const bi=context.window.ParcelwiseBI;await bi.load();
+const filters={from:'2026-07-01',to:'2026-09-30',partner:['Fedx','Delhivery'],destination:'All',region:'South',category:'All',service:'Express',payment:'All',outcome:'All',weather:'All',fragile:'All'};
+const filtered=bi.selectRows(data.rows,filters);assert(filtered.length>0);assert(filtered.every(r=>r.order_date>='2026-07-01'&&r.order_date<='2026-09-30'&&filters.partner.includes(r.partner)&&r.region==='South'&&r.service==='Express'));
+assert.equal(bi.selectRows(data.rows,{...filters,from:'2030-01-01'}).length,0);
+assert.equal(bi.correlation([{x:1,y:3},{x:2,y:2},{x:3,y:1}], 'x','y').r,-1);
+assert.equal(bi.correlation([{x:1,y:1},{x:1,y:2},{x:1,y:3}],'x','y').r,null);
+assert.equal(bi.metrics([]).otd,null);assert.equal(bi.metrics(data.rows).count,12000);
+assert.equal(new Set(data.rows.map(r=>r.order_id)).size,12000);
+assert(data.rows.every(r=>r.source==='Synthetic'&&Math.abs(r.quoted_price_inr-r.shipping_cost_inr-r.savings_inr)<0.001));
+bi.render({orders:[]});assert(elements['#workspace'].innerHTML.includes('12,000'));assert(elements['#bi-rows'].innerHTML.includes('SYN-'));
+console.log('Analytics filtering, correlation, empty states, rendering and 12,000-row integrity passed.');})();

@@ -19,6 +19,21 @@ class SellerDecisionTests(unittest.TestCase):
         self.f.action(oid,'negotiate',limits)
         for _ in range(6):self.f.advance_pipeline(oid,force=True)
         return self.f.order(oid)
+    def test_automatic_start_respects_requirements_and_does_not_restart(self):
+        self.payload['requirements']=dict(maxDays=2,fragile=True)
+        oid=self.create()
+        self.f.tick()
+        o=self.f.order(oid)
+        self.assertEqual(o['policy']['maxDays'],2)
+        self.assertTrue(o['policy']['fragile'])
+        self.assertEqual(o['status'],'parsed')
+        self.f.tick()
+        o=self.f.order(oid)
+        self.assertEqual(sum(e['kind']=='negotiation_requested' for e in o['events']),1)
+        self.assertEqual(self.f.dashboard()['ledger'],[])
+        for _ in range(6):self.f.advance_pipeline(oid,force=True)
+        self.assertEqual(self.f.order(oid)['status'],'awaiting_selection')
+
     def test_no_booking_without_explicit_seller_selection(self):
         oid=self.create()
         for _ in range(10):self.f.advance_pipeline(oid,force=True)

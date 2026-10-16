@@ -29,11 +29,11 @@ class SplitFlowTests(unittest.TestCase):
   self.assertEqual(sum(restored.dashboard()['wallets'].values()),1000000)
   self.assertEqual(o['route']['pickup'],server.CITIES[o['origin']])
  def test_scheduler_waits_and_recovers_pending_work(self):
-  r=server.flow.ingest(self.payload,deferred=True);server.flow.tick();self.assertEqual(server.flow.order(r['id'])['phase'],8)
-  server.flow.action(r['id'],'negotiate')
+  r=server.flow.ingest(self.payload,deferred=True);server.flow.tick();self.assertEqual(server.flow.order(r['id'])['phase'],1)
+  server.flow.tick();self.assertEqual(server.flow.order(r['id'])['phase'],1)
   with server.connect() as db:
    o=server.flow.order(r['id']);o['nextAt']='2000-01-01';db.execute('UPDATE orders SET data=? WHERE id=?',(canonical(o),r['id']))
-  server.flow.tick();self.assertEqual(server.flow.order(r['id'])['phase'],1)
+  server.flow.tick();self.assertEqual(server.flow.order(r['id'])['phase'],2)
  def test_two_http_apps_redirect_and_retry_after_outage(self):
   api=server.ThreadingHTTPServer(('127.0.0.1',0),server.Handler);shop=storefront.ThreadingHTTPServer(('127.0.0.1',0),storefront.Handler)
   for http in [api,shop]:threading.Thread(target=http.serve_forever,daemon=True).start()

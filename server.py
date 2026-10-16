@@ -9,7 +9,7 @@ from workflow import Workflow
 ROOT = Path(__file__).parent
 DB = Path(os.environ.get('PARCELWISE_DB', ROOT / 'data.sqlite3'))
 CITIES = {'Mumbai': [19.07,72.87], 'Delhi': [28.61,77.21], 'Bengaluru': [12.97,77.59], 'Hyderabad': [17.38,78.49], 'Chennai': [13.08,80.27], 'Pune': [18.52,73.85], 'Kolkata': [22.57,88.36], 'Jaipur': [26.91,75.79]}
-PARTNERS = [dict(id='A', name='Partner A', label='Everyday value', base=58, rate=22, days=4, ontime=.92, success=.98, quality=.88, maxweight=25),dict(id='B',name='Partner B',label='Express specialist',base=90,rate=30,days=2,ontime=.96,success=.99,quality=.93,maxweight=15),dict(id='C',name='Partner C',label='Care in every mile',base=76,rate=26,days=3,ontime=.98,success=.995,quality=.97,maxweight=30)]
+PARTNERS = [dict(id='A', name='Fedx', label='Everyday value', base=58, rate=22, days=4, ontime=.92, success=.98, quality=.88, maxweight=25),dict(id='B',name='Delhivery',label='Express specialist',base=90,rate=30,days=2,ontime=.96,success=.99,quality=.93,maxweight=15),dict(id='C',name='Shiprocket',label='Care in every mile',base=76,rate=26,days=3,ontime=.98,success=.995,quality=.97,maxweight=30)]
 STAGES = ['Booked','Picked up','In transit','Out for delivery','Delivered']
 
 @contextmanager
@@ -86,7 +86,8 @@ class Handler(SimpleHTTPRequestHandler):
         super().end_headers()
     def respond(self,data,status=200,cookie=None):
         body=json.dumps(data).encode(); self.send_response(status); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(body)))
-        if cookie: self.send_header('Set-Cookie',cookie)
+        if cookie:
+            for value in (cookie if isinstance(cookie,list) else [cookie]): self.send_header('Set-Cookie',value)
         self.end_headers(); self.wfile.write(body)
     def require_account(self,account=None):
         current=portal_auth.identity(self.headers)
@@ -100,6 +101,7 @@ class Handler(SimpleHTTPRequestHandler):
             order['bids']=[];order['offers']=[]
         return order
     def do_GET(self):
+        if self.path=='/api/portal-config': return self.respond(dict(storefrontUrl=os.environ.get('PARCELWISE_STOREFRONT_URL','http://localhost:8000')))
         if self.path=='/api/session': return self.respond(dict(account=portal_auth.identity(self.headers)))
         if self.path in ['/api/platform','/api/shipments'] or self.path.startswith('/api/v1/orders/'):
             try: self.require_account('company' if self.path.startswith('/api/shipments') else None)
@@ -193,6 +195,15 @@ class Handler(SimpleHTTPRequestHandler):
         except PermissionError as e: self.respond(dict(error=str(e)),401)
         except (ValueError,TypeError,KeyError) as e: self.respond(dict(error=str(e)),400)
 
+def email_worker():
+    import delivery_email
+    with connect() as db:
+        db.execute("UPDATE email_outbox SET status='unknown',error='Delivery interrupted; check sent mail before retrying.' WHERE status='sending'")
+    while True:
+        try: delivery_email.send_pending(connect)
+        except Exception: logging.exception('Email worker failed')
+        time.sleep(2)
+
 def worker():
     while True:
         try: flow.tick()
@@ -202,5 +213,6 @@ def worker():
 if __name__=='__main__':
     parser=argparse.ArgumentParser(); parser.add_argument('--port',type=int,default=8001); args=parser.parse_args(); init(); flow.init()
     threading.Thread(target=worker,daemon=True).start()
+    threading.Thread(target=email_worker,daemon=True).start()
     print(f'Parcelwise running at http://localhost:{args.port}',flush=True)
     ThreadingHTTPServer(('127.0.0.1',args.port),Handler).serve_forever()

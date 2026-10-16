@@ -9,11 +9,12 @@ const context=vm.createContext({
  console,location:{hash:'#order=PW-UI'},document:{activeElement:null,querySelector:s=>elements[s]||null,addEventListener:(name,fn)=>(listeners[name]??=[]).push(fn)},
  window:{addEventListener:()=>{}},setTimeout:()=>1,clearTimeout:()=>{},setInterval:()=>1,clearInterval:()=>{},
  fetch:async(url,opts)=>{requests.push({url,body:opts?.body&&JSON.parse(opts.body)});return {ok:true,json:async()=>url.includes('order-action')?{ok:true}:fixture};},
- fixture,offer,
+ fixture,offer,storefrontUrl:"http://localhost:8002",sessionStorage:{getItem:()=>"company"},
 });
 vm.runInContext(fs.readFileSync('static/workspace.js','utf8').replace(/\nroute\(\);\s*$/,''),context);
 vm.runInContext('renderOrder(fixture)',context);
-assert.match(elements['#workspace'].innerHTML,/Find suitable partners/);
+assert.doesNotMatch(elements['#workspace'].innerHTML,/Find suitable partners/);
+fixture.status='needs_attention';vm.runInContext('renderOrder(fixture)',context);
 assert.match(elements['#workspace'].innerHTML,/max="3"/);
 assert.equal(requests.length,0,'rendering an order cannot book or advance it');
 fixture.status='bidding';fixture.negotiationMode='local';
@@ -50,5 +51,43 @@ assert.match(elements['#workspace'].innerHTML,/Can you deliver for ₹150/);
  vm.runInContext('renderCustomer(fixture)',context);
  assert.doesNotMatch(elements['#workspace'].innerHTML,/id="feedback"/);
  assert.match(elements['#workspace'].innerHTML,/Good delivery/);
- console.log('UI approval, customer constraints, selection action and feedback states passed.');
+ vm.runInContext("data={orders:[fixture],wallets:{company:1000000,escrow:0},config:{partners:[offer]}};renderSeller()",context);
+ assert.match(elements['#workspace'].innerHTML,/Orders in. Delivery sorted./);
+ assert.doesNotMatch(elements['#workspace'].innerHTML,/class="wallets"/);
+ assert.match(elements['#workspace'].innerHTML,/data-current-order="PW-UI"/);
+ assert.doesNotMatch(elements['#workspace'].innerHTML,/Order pipeline/);
+ vm.runInContext('renderAnalytics()',context);
+ assert.match(elements['#workspace'].innerHTML,/Delivery performance/);
+ assert.match(elements['#workspace'].innerHTML,/Order pipeline/);
+ assert.doesNotMatch(elements['#workspace'].innerHTML,/order-sidebar/);
+ fixture.status='completed';
+ vm.runInContext('renderSeller()',context);
+ assert.match(elements['#workspace'].innerHTML,/Waiting for a new order/);
+ assert.doesNotMatch(elements['#workspace'].innerHTML,/data-current-order/);
+ vm.runInContext('renderAnalytics()',context);
+ assert.match(elements['#workspace'].innerHTML,/Completed order history/);
+ assert.match(elements['#workspace'].innerHTML,/PW-UI/);
+ fixture.status='awaiting_seller';
+ vm.runInContext('renderSeller()',context);
+ assert.match(elements['#workspace'].innerHTML,/data-current-order/);
+ for(const id of ['#wallet-available','#wallet-escrow','#wallet-paid'])elements[id]=element();
+ vm.runInContext('updateWallet({company:1000000,escrow:0})',context);
+ assert.equal(elements['#wallet-available'].textContent,'₹10,000');
+ vm.runInContext('updateWallet({company:985000,escrow:15000})',context);
+ assert.equal(elements['#wallet-available'].textContent,'₹9,850');
+ assert.equal(elements['#wallet-escrow'].textContent,'₹150');
+ fixture.autoDemo=true;fixture.status='booked';fixture.winner=offer;
+ fixture.email={status:'needs_configuration',recipient:'abhinavshetty0504@gmail.com'};
+ fixture.contract={state:'funded',terms:{amount:15000}};
+ vm.runInContext('renderSeller()',context);
+ assert.match(elements['#workspace'].innerHTML,/AUTOMATIC DELIVERY DEMO/);
+ assert.match(elements['#workspace'].innerHTML,/Secured in escrow/);
+ assert.match(elements['#workspace'].innerHTML,/id="delivery-map"/);
+ assert.match(elements['#workspace'].innerHTML,/waiting for Gmail sender setup/);
+ assert.doesNotMatch(elements['#workspace'].innerHTML,/data-select|Follow the live journey/);
+ vm.runInContext(`data.orders=[{...fixture,id:'older',status:'completed',completedAt:'2026-10-15',feedback:null},{...fixture,id:'latest',status:'completed',completedAt:'2026-10-16',feedback:{rating:5}}];renderSeller()`,context);
+ assert.doesNotMatch(elements['#workspace'].innerHTML,/Leave delivery feedback/,'Reviewed latest delivery must not expose an older review prompt');
+ vm.runInContext(`data.orders[1].feedback=null;renderSeller()`,context);
+ assert.match(elements['#workspace'].innerHTML,/Leave delivery feedback/);
+ console.log('UI flow, waiting state, analytics, wallet and automatic delivery presentation passed.');
 })().catch(e=>{console.error(e);process.exitCode=1;});

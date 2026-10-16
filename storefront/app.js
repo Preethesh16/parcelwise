@@ -44,9 +44,14 @@ function openCheckout(id) {
 document.addEventListener('click',event=>{const b=event.target.closest('button');if(b?.dataset.buy)openCheckout(b.dataset.buy);if(b?.dataset.close)$('#'+b.dataset.close).close();});
 $('#checkout-form').addEventListener('input',()=>{checkoutRequest=crypto.randomUUID();$('#checkout-total').textContent=money(catalog.products.find(p=>p.id===productId).price*Number($('#quantity').value));});
 $('#checkout-form').addEventListener('submit',async event=>{
- event.preventDefault();const button=event.submitter;button.disabled=true;button.textContent='Confirming & opening Parcelwise…';$('#checkout-error').textContent='';
+ event.preventDefault();const button=event.submitter;button.disabled=true;button.textContent='Placing your order…';$('#checkout-error').textContent='';
  const d=Object.fromEntries(new FormData(event.target));
- try{const result=await api('checkout',{productId,quantity:Number(d.quantity),customerName:d.customerName,maxDays:Number(d.maxDays),fragile:productId==='lamp'||d.fragile==='true',address:{line1:d.line1,city:d.city,postalCode:d.postalCode},requestId:checkoutRequest});location.assign(result.redirectUrl);}
+ try{const result=await api('checkout',{productId,quantity:Number(d.quantity),customerName:d.customerName,maxDays:Number(d.maxDays),fragile:productId==='lamp'||d.fragile==='true',address:{line1:d.line1,city:d.city,postalCode:d.postalCode},requestId:checkoutRequest});closeDialogs();
+ const product=catalog.products.find(p=>p.id===productId);
+ $('#shop').hidden=true;
+ $('#confirmation').hidden=false;
+ $('#confirmation').innerHTML=`<span class="eyebrow">EVERYDAY STORE</span><h1>Order placed.<br>You're all set.</h1><p>Thanks, ${esc(d.customerName)}. Your order is confirmed.</p><div class="confirmation-card"><h2>${esc(product.name)}</h2><p>${Number(d.quantity)} item(s) · ${money(product.price*Number(d.quantity))}</p><p><strong>Order reference</strong><br>${esc(result.id)}</p><h3>Delivering to</h3><p>${esc(d.line1)}<br>${esc(d.city)} · ${esc(d.postalCode)}</p><p>Your delivery address has been sent to Everyday Store’s Parcelwise dashboard. The store will compare delivery offers and arrange your shipment.</p><a class="primary" href="${esc(result.redirectUrl)}">Track delivery →</a> <a href="/shop">Continue shopping</a></div>`;
+ location.hash='confirmation';window.scrollTo(0,0);button.disabled=false;button.textContent='Place order →';}
  catch(error){$('#checkout-error').textContent=error.message;button.disabled=false;button.textContent='Retry confirmation →';}
 });
 (async()=>{try{catalog=await api('catalog');renderProducts();}catch(error){toast(error.message);}})();
