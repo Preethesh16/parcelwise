@@ -7,7 +7,7 @@
   <title>Parcelwise · Global Logistics</title>
   <link rel="stylesheet" href="landing.css">
   <link rel="stylesheet" href="landing-polish.css?v=1">
-<link rel="stylesheet" href="guide.css?v=1"></head>
+</head>
 <body>
   <main class="landing">
     <video class="hero-video" autoplay muted loop playsinline poster="https://images.unsplash.com/photo-1494412651409-8963ce7935a7?auto=format&amp;fit=crop&amp;w=1800&amp;q=85" aria-hidden="true">
@@ -17,11 +17,7 @@
 
     <header class="site-header">
       <a class="logo" href="/" aria-label="Parcelwise home"><span class="wordmark">parcelwise</span><span class="spark" aria-hidden="true">✳</span></a>
-      <nav aria-label="Primary navigation">
-        <a href="http://localhost:8001/#login=seller">Services</a>
-        <a href="http://localhost:8001/#login=partner">Partner network</a>
-        <a href="#access">Company</a>
-      </nav>
+
     </header>
 
     <section class="hero-content" aria-labelledby="hero-title">
@@ -45,10 +41,10 @@
     <section class="access" id="access" aria-label="Portal access">
       <div class="stat"><strong>24/7</strong><span>live delivery automation<br>from dispatch<br>to doorstep</span></div>
       <div class="portal-actions">
-        <a class="portal seller" href="http://localhost:8001/#login=seller"><span>Everyday Store login</span><b>↗</b></a>
-        <a class="portal partner" href="http://localhost:8001/#login=partner"><span>Partner demo logins</span><b>↗</b></a>
+        <a class="portal seller" href="http://localhost:8001/#login=seller"><span>Store login</span><b>↗</b></a>
+        <a class="portal partner" href="http://localhost:8001/#login=partner"><span>Delivery partner login</span><b>↗</b></a>
       </div>
     </section>
   </main>
-<script>fetch('/api/config').then(r=>r.json()).then(c=>{document.querySelectorAll('a[href^="http://localhost:8001"]').forEach(a=>a.href=c.parcelwiseUrl+'/'+new URL(a.href).hash)});</script><script src="guide.js?v=1"></script></body>
+<script>fetch('/api/config').then(r=>r.json()).then(c=>{document.querySelectorAll('a[href^="http://localhost:8001"]').forEach(a=>a.href=c.parcelwiseUrl+'/'+new URL(a.href).hash)});</script></body>
 </html>
