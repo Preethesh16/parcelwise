@@ -4,12 +4,13 @@ from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from contextlib import contextmanager
-from workflow import Workflow
+from workflow import Workflow, DEFAULT_PARTNERS
 
 ROOT = Path(__file__).parent
 DB = Path(os.environ.get('PARCELWISE_DB', ROOT / 'data.sqlite3'))
 CITIES = {'Mumbai': [19.07,72.87], 'Delhi': [28.61,77.21], 'Bengaluru': [12.97,77.59], 'Hyderabad': [17.38,78.49], 'Chennai': [13.08,80.27], 'Pune': [18.52,73.85], 'Kolkata': [22.57,88.36], 'Jaipur': [26.91,75.79]}
 PARTNERS = [dict(id='A', name='Fedx', label='Everyday value', base=58, rate=22, days=4, ontime=.92, success=.98, quality=.88, maxweight=25),dict(id='B',name='Delhivery',label='Express specialist',base=90,rate=30,days=2,ontime=.96,success=.99,quality=.93,maxweight=15),dict(id='C',name='Shiprocket',label='Care in every mile',base=76,rate=26,days=3,ontime=.98,success=.995,quality=.97,maxweight=30)]
+PARTNER_IDS = [p['id'] for p in DEFAULT_PARTNERS]
 STAGES = ['Booked','Picked up','In transit','Out for delivery','Delivered']
 
 @contextmanager
@@ -78,6 +79,8 @@ def shipments():
     return [dict(id=r['id'],**json.loads(r['data']),stage=r['stage'],status=STAGES[r['stage']],created=r['created'],feedback=json.loads(r['feedback']) if r['feedback'] else None) for r in rows]
 
 import portal_auth
+import analytics
+from urllib.parse import urlsplit, parse_qs
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self,*args,**kwargs): super().__init__(*args,directory=str(ROOT/'static'),**kwargs)
@@ -99,9 +102,23 @@ class Handler(SimpleHTTPRequestHandler):
             for field in ['customerToken','transactions','agentConfig','quoteSnapshot','bids','offers','candidates','chatQueue']:
                 order.pop(field,None)
             order['bids']=[];order['offers']=[]
+            order['events']=[e for e in order.get('events',[]) if e['kind'] not in ['counter','offer','declined','recommended']]
         return order
     def do_GET(self):
         if self.path=='/api/portal-config': return self.respond(dict(storefrontUrl=os.environ.get('PARCELWISE_STOREFRONT_URL','http://localhost:8000')))
+        if self.path in ['/store','/store/shop']:
+            self.send_response(302)
+            self.send_header('Location',os.environ.get('EVERYDAY_PUBLIC_URL','http://localhost:8000').rstrip('/')+('/shop' if self.path.endswith('/shop') else '/'))
+            self.end_headers();return
+        if urlsplit(self.path).path=='/api/analytics':
+            try:
+                account=self.require_account()
+                orders=flow.dashboard()['orders']
+                if account!='company':
+                    orders=[o for o in orders if o.get('winner',{}).get('id')==account.split(':')[1]]
+                filters={k:v[-1] for k,v in parse_qs(urlsplit(self.path).query).items()}
+                return self.respond(analytics.summarize(orders,filters))
+            except PermissionError as error: return self.respond(dict(error=str(error)),401)
         if self.path=='/api/session': return self.respond(dict(account=portal_auth.identity(self.headers)))
         if self.path in ['/api/platform','/api/shipments'] or self.path.startswith('/api/v1/orders/'):
             try: self.require_account('company' if self.path.startswith('/api/shipments') else None)
@@ -140,7 +157,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if self.headers.get('Origin') not in [None,'http://'+self.headers.get('Host','')]: raise PermissionError('Cross-origin portal requests are not allowed.')
             if self.path=='/api/login':
                 account=d.get('account')
-                if account not in ['company','partner:A','partner:B','partner:C'] or not flow.authorized(account,d.get('key')): raise PermissionError('Account or access key is incorrect.')
+                if account not in ['company']+['partner:'+pid for pid in PARTNER_IDS] or not flow.authorized(account,d.get('key')): raise PermissionError('Account or access key is incorrect.')
                 return self.respond(dict(account=account),cookie=portal_auth.create(account,self.headers))
             if self.path=='/api/logout': return self.respond(dict(ok=True),cookie=portal_auth.logout(self.headers))
             if self.path=='/api/connections': self.require_account(d.get('id') or 'company')
@@ -156,14 +173,14 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.respond(flow.ingest(d),201)
             if self.path=='/api/integrations/delivery':
                 partner=d.get('partnerId')
-                if partner not in ['A','B','C'] or not flow.authorized('partner:'+partner,self.headers.get('X-API-Key')): raise PermissionError('Invalid partner API key.')
+                if partner not in PARTNER_IDS or not flow.authorized('partner:'+partner,self.headers.get('X-API-Key')): raise PermissionError('Invalid partner API key.')
                 if 'stage' not in d: raise ValueError('An explicit stage is required for retry-safe tracking updates.')
                 return self.respond(flow.action(d.get('orderId'),'advance',d,partner=partner))
             if self.path=='/api/demo/order-action':
                 if d.get('action') not in ['advance','refund','fund','negotiate','select']: raise ValueError('Unsupported demo action.')
                 return self.respond(flow.action(d.get('id'),d['action'],d))
             if self.path=='/api/demo/partner-action':
-                if d.get('partnerId') not in ['A','B','C']: raise ValueError('Choose a partner.')
+                if d.get('partnerId') not in PARTNER_IDS: raise ValueError('Choose a partner.')
                 if 'stage' not in d: raise ValueError('A delivery stage is required.')
                 return self.respond(flow.action(d.get('orderId'),'advance',d,partner=d['partnerId']))
             if self.path=='/api/tracking-action':

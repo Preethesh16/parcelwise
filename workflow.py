@@ -45,6 +45,7 @@ class Workflow:
     def init(self):
         with self.connect() as db:
             db.executescript('''
+            CREATE TABLE IF NOT EXISTS ai_proposals (key TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS email_outbox (order_id TEXT PRIMARY KEY, recipient TEXT NOT NULL, subject TEXT NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL, error TEXT, sent_at TEXT);
             CREATE TABLE IF NOT EXISTS settings (id TEXT PRIMARY KEY, data TEXT NOT NULL, key_hash TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY, external_id TEXT UNIQUE NOT NULL, payload_hash TEXT NOT NULL, data TEXT NOT NULL, token TEXT UNIQUE NOT NULL, created TEXT NOT NULL);
@@ -225,7 +226,13 @@ class Workflow:
         if current.get('negotiationMode')=='openai' and phase in [2,3,4] and current.get('chatRound')!=phase-1 and (force or current['nextAt']<=now()):
             with self.connect() as db:
                 snapshot=db.execute('SELECT data FROM orders WHERE id=?',(oid,)).fetchone()['data']
-            try: prepared=negotiation_ai.round_messages(json.loads(snapshot),phase-1)
+            def cached(key):
+                with self.connect() as db:
+                    found=db.execute('SELECT data FROM ai_proposals WHERE key=?',(key,)).fetchone()
+                return json.loads(found['data']) if found else None
+            def save(key,proposal):
+                with self.connect() as db:db.execute('INSERT OR IGNORE INTO ai_proposals VALUES(?,?)',(key,canonical(proposal)))
+            try: prepared=negotiation_ai.round_messages(json.loads(snapshot),phase-1,cached=cached,save=save)
             except ValueError as exc: failure=str(exc)
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -410,6 +417,10 @@ class Workflow:
                 if target<=o['stage']: return dict(ok=True,duplicate=True)
                 if target!=o['stage']+1: raise ValueError('Delivery stages must arrive in sequence.')
                 o['nextAt']=(datetime.now(timezone.utc)+timedelta(seconds=5)).isoformat()
+                if target==4:
+                    o['deliveredAt']=now()
+                    o['actualDeliveryDays']=o['winner']['days']
+                    o['delayDays']=0
                 o['stage']=target;o['status']=['booked','picked_up','in_transit','out_for_delivery','awaiting_confirmation'][target]
                 db.execute('UPDATE shipments SET stage=? WHERE id=?',(target,oid))
                 event(o['winner']['name'],['','Parcel picked up.','Parcel in transit.','Parcel out for delivery.','Partner reports delivery. Escrow stays locked until customer confirmation.'][target],'tracking')
