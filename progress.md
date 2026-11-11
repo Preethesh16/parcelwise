@@ -88,3 +88,11 @@ All implementation items listed earlier are now delivered. Earlier pending entri
 - Final running API/store endpoints both return HTTP 200. Credential scan passed; working tree was clean after implementation commit.
 - Screenshot saved outside Git at ../../work/analytics-final.png. Combined Shiprocket + sample-history filters verified at 150 records on the final build.
 - Goal requirements are complete for the local simulation; live provider timing depends on OpenAI response latency.
+
+## README and screenshot refresh — 2026-11-12
+- Rewrote README around the current three-carrier implementation: quick start, login table, automatic flow diagram, policy enforcement, analytics provenance, environment configuration, SMTP behavior, architecture, API and test commands.
+- Replaced stale manual-ingestion and five-account descriptions with current behavior. Distinguished operational orders from the static 12,000-order analytics dataset.
+- Added five fresh repository-hosted JPEG screenshots: storefront, seller workspace, courier dashboard, analytics overview and trend/comparison charts.
+- Screenshots use isolated databases outside the repository, fictional sample history and a staged in-transit demo order. No production/customer database was modified; SMTP and live OpenAI were disabled for this capture.
+- Verified all local README links and JPEG signatures; JavaScript workspace, journey and analytics tests passed. No application source changes were made.
+- Full Python discovery also passed: 48 tests. Screenshot-preview processes were stopped after capture; existing app services were left untouched.

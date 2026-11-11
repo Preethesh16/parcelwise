@@ -1,135 +1,212 @@
-# Parcelwise
+# Parcelwise × Everyday
 
-A local ecommerce-to-delivery demo with an automatic delivery lifecycle.
+**From checkout to courier selection, escrow and delivery — one connected demo.**
 
-## Run
+Parcelwise connects an ecommerce storefront, a seller workspace and separate courier workspaces. Policy-bound agents negotiate delivery prices, the server selects an eligible partner, and an automatic simulation shows the contract, escrow funding, transit and payout. Analytics helps explore delivery cost, reliability and customer experience.
 
-Python 3.10+; the app needs no pip or npm packages.
+Built with **Python · SQLite · Vanilla JavaScript · Leaflet/OpenStreetMap · optional OpenAI Responses API**. No pip or npm dependencies are required to run the app.
+
+[Quick start](#quick-start) · [Screenshots](#screenshots) · [Demo accounts](#demo-accounts) · [How it works](#how-it-works) · [Analytics](#analytics) · [Configuration](#configuration) · [Tests](#tests)
+
+> This is a local demonstration. Courier services, contracts, wallets, escrow and delivery positions are simulated. OpenAI proposals and SMTP email are optional external integrations.
+
+## Screenshots
+
+Captured from the current application using an isolated sample database. All customer details shown are fictional. The populated courier history is screenshot fixture data; a fresh operational database starts without those sample deliveries.
+
+### Everyday storefront
+
+Three everyday products, parcel-aware checkout and an order-confirmation screen with customer tracking.
+
+![Everyday storefront with bag, bottle and lamp products](docs/screenshots/storefront.jpg)
+
+### Seller workspace
+
+Current orders, customer delivery details, the selected courier and the delivery lifecycle in one workspace.
+
+![Seller workspace showing a sample order in transit with Delhivery](docs/screenshots/seller-workspace.jpg)
+
+### Delivery intelligence
+
+A dedicated analytics experience with shared filters, interactive visualizations and a fictional 12,000-order dataset.
+
+![Seller analytics overview and filters](docs/screenshots/analytics-overview.jpg)
+
+![Delivery analytics charts and comparisons](docs/screenshots/analytics-charts.jpg)
+
+### Courier workspace
+
+Each courier sees its own assignments, rating distribution, service policy and customer feedback.
+
+![Delhivery workspace with delivery metrics and service profile](docs/screenshots/courier-dashboard.jpg)
+
+## Quick start
+
+Requires **Python 3.10+**. Node.js is only needed for JavaScript tests. Internet access is needed for external map tiles and optional integrations.
 
 ```sh
-python run_demo.py --store-port 8002
+git clone https://github.com/Preethesh16/parcelwise.git
+cd parcelwise
+python3 run_demo.py --store-port 8002 --api-port 8001
 ```
 
-- Landing: http://localhost:8002/
-- Customer demo shop: http://localhost:8002/shop
-- Seller dashboard: http://localhost:8001/#platform
-- Delivery partner dashboard: http://localhost:8001/#partner=A
-- Seller defaults: http://localhost:8001/#connections
-
-The original truck/video landing page is the entry point. Choose **Seller login** or **Delivery partner login** to sign in, then enter the corresponding workspace. The brand link returns home and Sign out clears the session. Direct portal links also require sign-in.
-
-Local demo access keys: seller (`Everyday Store`): `demo-company-key`; Fedx: `demo-partner-A-key`; Delhivery/Shiprocket use `demo-partner-B-key` / `demo-partner-C-key`. These are intentionally shared demo credentials, shown on the sign-in screen. Sessions expire after eight hours or a server restart, and use HttpOnly, SameSite=Strict cookies. Partners see only their assignments and cannot perform seller actions. Public customer tracking remains token-based. Do not deploy these demo accounts publicly.
-
-Demo carrier login pages: Fedx (`/#login=A`), Delhivery (`/#login=B`), Shiprocket (`/#login=C`) on port 8001. Their keys remain `demo-partner-A-key`, `demo-partner-B-key`, and `demo-partner-C-key`. These names represent simulated demo carriers only.
-
-## Product flow
-
-1. The customer chooses a product, address, delivery deadline, and handling requirements. Lamps always require fragile handling.
-2. The shop saves the confirmed order and sends it to Parcelwise. The customer stays on an order-confirmation screen with the entered address and a tracking link; the seller dashboard receives the new order.
-3. The server automatically begins negotiation using saved shipping budget, deadline, minimum reliability, handling and ranking priority, constrained by the customer’s requirements. The conversation and shortlist appear in Current orders.
-4. Seller and partner policy agents exchange opening offers and two counteroffer rounds. Coverage, volumetric weight, partner availability, fragile handling, and minimum reliability filter candidates. Budget and deadline filter final offers.
-5. The seller sees a ranked shortlist with negotiated cost, delivery promise, fit score, profile reliability, and review counts. The recommended partner is the highest-ranked eligible offer. For new demo orders, the server automatically selects the recommended eligible offer after showing the negotiation. It then creates the contract and funds simulated escrow exactly once.
-6. After selection, a persisted worker creates the contract and funds simulated escrow once. The chosen partner sees the assignment, seller, constraints and agreed terms.
-7. The demo worker reports simulated pickup, transit, out-for-delivery, and delivery in sequence with visible pauses between stages. The seller's map shows each reported stage. The customer page refreshes automatically.
-8. After delivery, the demo worker simulates recipient confirmation and releases escrow. This is labelled as a simulation, never a real customer confirmation. No rating or feedback is invented. Completed orders disappear from Current orders and remain in Analytics history.
-9. Partner history and rating charts reflect actual demo orders. Feedback updates the profile estimates used by future negotiations.
-
-Existing booked orders retain their agreed terms. New orders start negotiation automatically using saved shipping defaults. New demos automatically select the best eligible partner and advance through simulated delivery and receipt. Polling does not replay or reset completed deliveries.
-
-## Constraints and ranking
-
-| Constraint | Enforcement |
+| Experience | Local URL |
 |---|---|
-| Seller shipping budget | Final price cannot exceed the budget |
-| Delivery deadline | Uses the stricter seller/customer deadline |
-| Route coverage | Checks built-in service area and configured exclusions |
-| Parcel weight and dimensions | Uses the greater of physical weight and volume / 5,000 |
-| Reliability floor | Candidates must meet the seller's percentage threshold |
-| Fragile handling | Customer requirements cannot be relaxed by the seller |
-| Partner policies | Availability, price floor, maximum discount, transit promise and weight limit |
+| Landing page | [localhost:8002](http://localhost:8002/) |
+| Everyday shop | [localhost:8002/shop](http://localhost:8002/shop) |
+| Seller login | [localhost:8001/#login=seller](http://localhost:8001/#login=seller) |
+| Courier login | [localhost:8001/#login=partner](http://localhost:8001/#login=partner) |
+| Seller analytics | [localhost:8001/#analytics](http://localhost:8001/#analytics) |
+| Seller shipping rules | [localhost:8001/#connections](http://localhost:8001/#connections) |
 
-Eligible offers use normalized price, speed, reliability, and parcel-care scores. The seller chooses balanced, cost, speed, or reliability priority. Feedback estimates use historical demo priors equivalent to 40 deliveries; same-route reviews have full weight and other routes 0.2 weight. Review counts are displayed so estimates are not mistaken for observed customer-rating averages.
+The command above uses port **8002** for the store and **8001** for Parcelwise. Running without flags uses **8000/8001**. Choose other ports if occupied; the runner updates cross-service URLs. Both services bind to `127.0.0.1`. Stop them with **Ctrl+C**. Existing SQLite data is retained between runs.
 
-## Dashboard design
+## Demo accounts
 
-Seller: four KPI cards, order pipeline bars, partner assignment bars, searchable and filterable orders, and one focused order detail screen.
+Choose an account on its sign-in page and enter the matching access key.
 
-Partner: assigned work, active deliveries, rating distribution, profile settings, completed history, and customer comments. Each carrier has a separate login and dashboard. Sign in to separate tabs to keep the seller and carrier workspaces open together.
+| Workspace | Login route on the API port | Demo access key |
+|---|---|---|
+| Everyday Store seller | `/#login=seller` | `demo-company-key` |
+| Fedx | `/#login=A` | `demo-partner-A-key` |
+| Delhivery | `/#login=B` | `demo-partner-B-key` |
+| Shiprocket | `/#login=C` | `demo-partner-C-key` |
 
-Negotiation transcripts, parcel addresses and history are expandable. Charts are native HTML/CSS in a Power BI-inspired style, not an embedded Microsoft Power BI report.
+These are the three carrier profiles in the current version. Carrier names represent simulated accounts, not connected commercial services. Shared demo keys are intentionally public; they are not production credentials. Sessions expire after eight hours or a server restart. Courier APIs scope assignments to the signed-in partner. Seller and courier workspaces can remain open in separate tabs.
 
-## Demo boundaries and production plan
+## How it works
 
-Negotiation supports OpenAI Responses API proposals or explicitly labelled local policy agents. With OPENAI_API_KEY set, new negotiations use OpenAI by default. Set PARCELWISE_AI_MODE=local to force the offline demo, or openai to require live AI (missing credentials then block negotiation). OPENAI_MODEL defaults to gpt-4.1-mini and can be overridden. Restart the server after changing environment variables. Never put the key in frontend code, Git, or chat.
+```mermaid
+flowchart LR
+    A[Everyday checkout] --> B[Confirmed order API]
+    B --> C[Policy checks and agent negotiation]
+    C --> D[Eligible courier selected]
+    D --> E[Simulated contract]
+    E --> F[Escrow funded]
+    F --> G[Map delivery simulation]
+    G --> H[Simulated receipt and payout]
+    H --> I[Optional customer review]
+```
 
-Seller and partner agents make separate structured-output requests for each eligible partner in each of three rounds (up to 18 calls for three partners). Only route cities, parcel weight, delivery policies and proposals are transmitted, not customer names, street addresses or tracking tokens. Responses are not stored by the API (store=false); provider abuse-monitoring policies still apply. Price proposals are validated against server-enforced bounds. Transit times and ranking remain deterministic. Failed/invalid calls stop negotiation with a retry message; they never silently switch to local proposals or select a partner. An in-flight failed round may incur API charges when retried. New automatic demos select the highest-ranked eligible offer after all rounds.
+1. **Order:** checkout saves the purchase and sends an authenticated order event to Parcelwise. The customer receives confirmation and a tracking link.
+2. **Negotiate:** seller and courier agents exchange three rounds of proposals within saved policies. The seller workspace shows the conversation and offers.
+3. **Choose:** the server ranks eligible offers and automatically selects the recommendation after a visible pause.
+4. **Secure:** a simulated delivery contract records the agreed terms. The ledger moves demo credits from the company wallet into escrow exactly once.
+5. **Deliver:** a durable worker advances pickup, transit, out-for-delivery and arrival. The map follows simulated city-to-city positions; the process survives page refreshes and server restarts.
+6. **Settle:** new automatic demos simulate recipient confirmation and release escrow. This is explicitly a simulated receipt, not a real customer confirmation. No customer rating is invented.
+7. **Review:** customers can submit feedback after delivery. Courier history and operational feedback reflect persisted orders. Completed work leaves Current orders and remains available in history.
 
-To enable live proposals, set OPENAI_API_KEY securely in the server environment, optionally OPENAI_MODEL, then run `python run_demo.py`. The order constraints form displays the active mode. Without credentials the default remains a labelled local simulation. Implementation follows [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses).
+No eligible offer or insufficient funds stops the flow for review. Existing bookings retain their agreed terms. Older manual workflows remain supported.
 
-The delivery map uses Leaflet and OpenStreetMap tiles with simulated city-to-city positions, not live courier GPS. Funds and escrow are local demo credits, not real payments or blockchain transactions.
+### Rules enforced by the server
 
-The seller and partner workspaces use **local shared demo access-key sign-in**, not production identity. Browser portal APIs enforce session roles and partner assignment checks. There is one seller account, no public registration or password recovery, and legacy shipment simulation endpoints remain available. Both servers bind to 127.0.0.1. Production requires individual accounts, stronger credential policies, HTTPS, comprehensive API authorization and tenant isolation.
+| Rule | Behavior |
+|---|---|
+| Budget | Final shipping price must fit the seller's budget |
+| Deadline | Uses the stricter customer/seller deadline |
+| Serviceability | Checks route coverage, exclusions and courier availability |
+| Parcel size | Billable weight is the greater of physical weight and volume / 5,000 |
+| Handling | Fragile requirements cannot be relaxed; lamps require fragile handling |
+| Reliability | Candidates must satisfy the seller's minimum reliability |
+| Courier policy | Enforces price floor, discount bounds, transit promise and weight limit |
+| Ranking | Seller selects balanced, price, speed or reliability priority |
 
-The implemented workflow provides a foundation for these production increments:
+## Analytics
 
-1. Identity and ownership: seller and carrier sign-in, tenant-scoped order queries, role checks, audit history and session protection.
-2. AI operations: configure the implemented OpenAI adapter, spending limits, production evaluation, retry budgets and per-tenant rate limits. Keep hard constraints, offer validation, seller approval and money movement deterministic.
-3. Carrier integration: real quotes, serviceability by postal code, capacity, pickup windows, insurance, cash-on-delivery support, returns and shipment booking. Add offer expiry and revalidation at selection.
-4. Tracking and proof: signed carrier webhooks, GPS/route providers, delivery ETA, proof of delivery and notifications.
-5. Analytics and operations: measured on-time outcomes, dispute resolution, review moderation, retention policies, monitoring and an optional Power BI dataset/report integration.
+The seller's business-intelligence dashboard uses **12,000 fictional orders**, covering **October 2024–September 2026**, with **31 fields** and seed `16102026`. This static dataset is separate from operational SQLite orders, wallets, bookings and email. New checkouts do not become synthetic chart rows; operational history is shown separately.
 
-These production services require provider credentials, carrier agreements and deployment configuration; they are not claimed to be connected in the local demo.
+- Combined date, courier, destination, region, product category, service, payment, outcome, weather and handling filters.
+- Ten visual panels, KPI cards, carrier scorecard, correlation explorer and a detailed order table.
+- Clickable carrier, city and product visuals to filter the cohort; Reset clears selections.
+- Filtered CSV export includes all matching records, not just the visible table page.
+- On-time rate uses delivered orders; average ratings exclude unrated records. Correlations exclude missing pairs and describe association, not causation. Scatter plots sample dots while statistics use all valid pairs.
 
-## API and persistence
+Explore the [JSON dataset](static/data/synthetic_orders.json), [CSV dataset](static/data/synthetic_orders.csv) and [data dictionary](static/data/data_dictionary.csv). Differences between carriers are simulation assumptions, not claims about real companies.
 
-The demo uses independent SQLite databases: store.sqlite3 for checkout retries and data.sqlite3 for orders, wallets, shipments and feedback.
+## Configuration
 
-- POST /api/v1/orders — authenticated confirmed-order ingestion; returns 202 and an awaiting_seller order.
-- POST /api/integrations/orders — compatibility ingestion; also waits for seller approval.
-- GET /api/platform — local demo dashboard.
-- GET /api/v1/orders/{id} — local demo order details.
-- POST /api/demo/order-action — negotiate, select, fund, refund or legacy demo advance.
-- POST /api/demo/partner-action — selected-partner stage update for the local workspace.
-- POST /api/integrations/delivery — partner-key authenticated stage update.
-- GET /api/tracking/{token} — customer delivery view.
-- POST /api/tracking-action — token-checked confirmation, dispute or feedback.
-- POST /api/connections — local demo configuration.
+### Negotiation mode
 
-Order IDs are idempotency keys; changed payloads with reused IDs are rejected. Selection is persisted atomically, repeated same-partner selection is a no-op, a different second selection is rejected, and contract funding cannot double-debit. Delivery updates must be sequential. Existing customer-token and partner-key checks remain enforced.
+Without a key, negotiations use explicitly labelled local policy agents. To enable live proposals, set `OPENAI_API_KEY` in the **server environment** before starting. Do not put it in frontend code or commit it.
 
-Incoming integration keys: demo-company-key and demo-partner-A-key / B-key / C-key. They are stored hashed. Local sign-in validates the same keys and issues an opaque session cookie; browser portal requests use that cookie. The store sends its company key server-to-server.
+| Variable | Purpose |
+|---|---|
+| `PARCELWISE_AI_MODE` | `local` forces offline proposals; `openai` requires a key |
+| `OPENAI_API_KEY` | Server-side OpenAI credential |
+| `OPENAI_MODEL` | Defaults to `gpt-4.1-mini` |
+| `PARCELWISE_DB` / `EVERYDAY_DB` | Override the two SQLite database paths |
+| `PARCELWISE_API_URL` | Store-to-API internal URL |
+| `PARCELWISE_PUBLIC_URL` | Customer-facing Parcelwise URL |
+| `EVERYDAY_PUBLIC_URL` | Store URL used by the runner |
+| `PARCELWISE_COMPANY_KEY` | Store's order-ingestion credential; must match the API configuration |
 
-Environment: PARCELWISE_DB, EVERYDAY_DB, PARCELWISE_API_URL, PARCELWISE_PUBLIC_URL, PARCELWISE_COMPANY_KEY. Defaults target the two local servers. A failed store handoff preserves the order; retrying the same checkout safely resends the original event.
+Seller and courier agents make separate structured-output requests, up to 18 calls for three eligible carriers over three rounds. Requests include logistics and policy data, not customer names, street addresses or tracking tokens. The adapter uses `store=false`, validates prices against server bounds and caches successful proposals. Provider failures do not silently fall back to local proposals. Restart after changing environment variables.
 
-## Verification
+### Optional confirmation email
+
+Carrier selection creates a persistent email-outbox entry. Email runs independently of delivery; without SMTP configuration it remains queued with a sender-setup message.
+
+For Gmail, run `python3 setup_gmail.py` and enter an app password at the hidden local prompt, then restart the runner. SMTP settings are loaded from Git-ignored `.env`; see [.env.example](.env.example). The current recipient is fixed in [delivery_email.py](delivery_email.py), so review it before enabling sending. SMTP acceptance does not guarantee inbox delivery, and ambiguous submissions are not automatically resent.
+
+The runner reads SMTP settings from `.env`; export OpenAI settings in the process environment.
+
+## Architecture and persistence
+
+```text
+Browser
+ ├── Everyday storefront → storefront.py → store.sqlite3
+ │                              │ authenticated order event
+ └── Seller / courier portals → server.py → workflow.py → data.sqlite3
+                                  ├── negotiation_ai.py (local / OpenAI)
+                                  ├── delivery_email.py (optional SMTP)
+                                  └── static/analytics.js + synthetic dataset
+```
+
+| File or directory | Responsibility |
+|---|---|
+| `run_demo.py` | Starts both services and configures their URLs |
+| `storefront.py`, `storefront/` | Shop, checkout, confirmation and retry persistence |
+| `server.py`, `portal_auth.py` | HTTP API, sessions and role checks |
+| `workflow.py` | Negotiation, selection, contracts, escrow and delivery state machine |
+| `negotiation_ai.py` | Validated agent proposals and persistent proposal reuse |
+| `static/` | Seller/courier UI, map, analytics and Milo guide |
+| `test_*.py`, `test_*.js` | Isolated backend and frontend checks |
+| `docs/screenshots/` | Repository-hosted README screenshots |
+
+`store.sqlite3` stores confirmed checkout payloads and retry state. `data.sqlite3` stores orders, policies, wallets, ledger entries, proposal cache and email outbox. Both are ignored by Git. Order IDs are idempotency keys; reuse with a changed payload is rejected. Funding and release are protected against duplicate ledger entries; delivery updates must be sequential.
+
+### Main endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/v1/orders` | Authenticated order ingestion; returns HTTP 202 and starts the automatic flow |
+| `GET /api/platform` | Role-scoped workspace data |
+| `GET /api/v1/orders/{id}` | Authorized order details |
+| `POST /api/connections` | Account-owned policy changes |
+| `POST /api/integrations/delivery` | Partner-key authenticated delivery update |
+| `GET /api/tracking/{token}` | Customer delivery state |
+| `POST /api/tracking-action` | Token-authorized receipt, issue or feedback action |
+| `POST /api/login`, `POST /api/logout` | Local account sessions |
+
+See [the example order payload](static/api-example.json). Customer tracking uses an unguessable token; browser portal requests use session cookies.
+
+## Tests
+
+Run from the repository root. Python tests use isolated databases; email tests mock SMTP.
 
 ```sh
-python -m unittest test_workflow test_split_flow test_server test_seller_flow test_negotiation_ai
+python3 -m unittest discover -v
+node test_workspace.js
+node test_analytics.js
+node test_journey.js
 node --check static/workspace.js
 node --check storefront/app.js
-node test_workspace.js
 ```
 
-Tests use isolated databases. They cover approval boundaries, alternative partner selection, retries, no-match handling, customer constraints, policy floors, ledger conservation, selected-partner delivery events, confirmation and feedback affecting later rankings.
+Coverage includes automatic and legacy flows, policy bounds, no-match cases, ledger conservation, restart recovery, sessions, courier ownership, feedback, AI proposal validation and analytics filtering.
 
-## Automatic demo and Gmail confirmation
+## Demo scope
 
-New orders store `autoDemo=true`. The persisted server worker runs negotiation, selects the recommended eligible carrier, creates the contract, funds escrow, advances delivery stages, simulates receipt and releases escrow. Each stage has a visible pause. No browser needs to remain open. No-match and insufficient-funds states stop with an explanation. No fake customer rating is generated.
+There are no real courier bookings, live GPS feeds, bank transfers or deployed blockchain contracts. The map uses Leaflet/OpenStreetMap with simulated positions. The application uses local shared accounts and one seller; it is not a production multi-tenant service. Production would require individual identity, comprehensive authorization, HTTPS, real carrier/payment integrations, proof of delivery and operational monitoring.
 
-Partner selection creates one persistent confirmation email for `abhinavshetty0504@gmail.com`, containing the order reference, carrier, agreed shipping price, route and delivery promise. It clearly identifies the booking and payments as a demo. Email runs on a separate worker and never blocks delivery.
-
-To use Gmail as the sender, enable Google 2-Step Verification and create an app password (https://support.google.com/mail/answer/185833). Run `python3 setup_gmail.py` in this repository and enter the app password at the hidden terminal prompt. Restart `python3 run_demo.py --store-port 8002`. The credential stays in Git-ignored `.env`, with owner-only file permissions. Never paste it into chat.
-
-Without sender configuration, confirmations remain queued and the dashboard says sender setup is needed. SMTP failures are reported; ambiguous submissions are not automatically retried to avoid duplicates. A `sent` status means the SMTP server accepted the message, not guaranteed inbox placement.
-
-Verification: `python3 -m unittest test_automatic_demo test_workflow test_split_flow test_seller_flow test_negotiation_ai test_portal_sessions` and `node test_workspace.js`. Email tests mock SMTP and do not send real emails.
-
-### Synthetic business intelligence demo
-
-The seller Analytics page loads `static/data/synthetic_orders.json`: 12,000 fictional historical orders across October 2024–September 2026, with 31 fields and seed 16102026. CSV and field definitions are available directly in the dashboard under Full dataset and Data dictionary. This data is isolated from SQLite orders, wallets, bookings, and emails. Carrier differences are simulation assumptions, not measurements of real carrier performance.
-
-Use date presets and combined partner, destination, region, category, service, payment, outcome, weather, and handling slicers. All ten visual panels, KPIs, the carrier scorecard, correlation explorer, and detail table follow the selected cohort. Click carrier bars, city heatmap cells, or product bars to drill down; Reset clears filters. Export filtered CSV exports the entire matching cohort, not just the current table page. Pearson correlation excludes missing pairs; scatter dots are sampled while its statistic uses all valid pairs. On-time rate uses delivered orders only; unrated orders do not count toward average ratings.
-
-The automatic order demo pauses for contract creation and escrow funding, then advances delivery milestones every 5 seconds, with 3.5 seconds between negotiation messages. Auto-follow smoothly brings each new stage into view and can be toggled off. The delivery map is retained during refreshes rather than recreated, and reading older negotiation messages no longer forces the chat to its bottom.
-
-Validation: `node test_analytics.js`, `node test_workspace.js`, and `python3 -m unittest discover -v`.
+Implementation notes and previous verification records are in [progress.md](progress.md).
